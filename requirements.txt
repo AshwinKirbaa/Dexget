@@ -1,0 +1,24 @@
+PyQt6
+pyaudiowpatch
+vosk
+psutil
+requests
+pywin32
+pycaw
+pypdf
+python-docx
+openpyxl
+python-pptx
+Pillow
+pytesseract
+selenium>=4.20,<5
+beautifulsoup4>=4.12,<5
+pyautogui>=0.9.54,<1
+openai
+ollama
+python-dotenv>=1,<2
+pywinauto>=0.6.9,<0.7; sys_platform == "win32"
+uiautomation>=2.0.0; sys_platform == "win32"
+playwright>=1.40.0
+typesafe-sdk
+

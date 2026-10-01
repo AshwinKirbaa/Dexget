@@ -1,0 +1,36 @@
+BrowserType.connect
+
+This method attaches Playwright to an existing browser instance created via `BrowserType.launchServer` in Node.js.
+
+**NOTE** The major and minor version of the Playwright instance that connects needs to match the version of
+Playwright that launches the browser (1.2.3 → is compatible with 1.2.x).
+
+Parameters
+----------
+endpoint : str
+    A Playwright browser websocket endpoint to connect to. You obtain this endpoint via `BrowserServer.wsEndpoint`.
+timeout : Union[float, None]
+    Maximum time in milliseconds to wait for the connection to be established. Defaults to `0` (no timeout).
+slow_mo : Union[float, None]
+    Slows down Playwright operations by the specified amount of milliseconds. Useful so that you can see what is going
+    on. Defaults to 0.
+headers : Union[Dict[str, str], None]
+    Additional HTTP headers to be sent with web socket connect request. Optional.
+expose_network : Union[str, None]
+    This option exposes network available on the connecting client to the browser being connected to. Consists of a
+    list of rules separated by comma.
+
+    Available rules:
+    1. Hostname pattern, for example: `example.com`, `*.org:99`, `x.*.y.com`, `*foo.org`.
+    1. IP literal, for example: `127.0.0.1`, `0.0.0.0:99`, `[::1]`, `[0:0::1]:99`.
+    1. `<loopback>` that matches local loopback interfaces: `localhost`, `*.localhost`, `127.0.0.1`, `[::1]`.
+
+    Some common examples:
+    1. `"*"` to expose all network.
+    1. `"<loopback>"` to expose localhost network.
+    1. `"*.test.internal-domain,*.staging.internal-domain,<loopback>"` to expose test/staging deployments and
+       localhost.
+
+Returns
+-------
+Browser

@@ -1,0 +1,210 @@
+BrowserType.launch_persistent_context
+
+Returns the persistent browser context instance.
+
+Launches browser that uses persistent storage located at `userDataDir` and returns the only context. Closing this
+context will automatically close the browser.
+
+Parameters
+----------
+user_data_dir : Union[pathlib.Path, str]
+    Path to a User Data Directory, which stores browser session data like cookies and local storage. Pass an empty
+    string to create a temporary directory.
+
+    More details for
+    [Chromium](https://chromium.googlesource.com/chromium/src/+/master/docs/user_data_dir.md#introduction) and
+    [Firefox](https://wiki.mozilla.org/Firefox/CommandLineOptions#User_profile). Chromium's user data directory is the
+    **parent** directory of the "Profile Path" seen at `chrome://version`.
+
+    Note that browsers do not allow launching multiple instances with the same User Data Directory.
+
+    **NOTE** Chromium/Chrome: Due to recent Chrome policy changes, automating the default Chrome user profile is not
+    supported. Pointing `userDataDir` to Chrome's main "User Data" directory (the profile used for your regular
+    browsing) may result in pages not loading or the browser exiting. Create and use a separate directory (for example,
+    an empty folder) as your automation profile instead. See https://developer.chrome.com/blog/remote-debugging-port
+    for details.
+
+channel : Union[str, None]
+    Browser distribution channel.
+
+    Use "chromium" to [opt in to new headless mode](../browsers.md#chromium-new-headless-mode).
+
+    Use "chrome", "chrome-beta", "chrome-dev", "chrome-canary", "msedge", "msedge-beta", "msedge-dev", or
+    "msedge-canary" to use branded [Google Chrome and Microsoft Edge](../browsers.md#google-chrome--microsoft-edge).
+executable_path : Union[pathlib.Path, str, None]
+    Path to a browser executable to run instead of the bundled one. If `executablePath` is a relative path, then it is
+    resolved relative to the current working directory. Note that Playwright only works with the bundled Chromium,
+    Firefox or WebKit, use at your own risk.
+args : Union[Sequence[str], None]
+    **NOTE** Use custom browser args at your own risk, as some of them may break Playwright functionality.
+
+    Additional arguments to pass to the browser instance. The list of Chromium flags can be found
+    [here](https://peter.sh/experiments/chromium-command-line-switches/).
+ignore_default_args : Union[Sequence[str], bool, None]
+    If `true`, Playwright does not pass its own configurations args and only uses the ones from `args`. If an array is
+    given, then filters out the given default arguments. Dangerous option; use with care. Defaults to `false`.
+handle_sigint : Union[bool, None]
+    Close the browser process on Ctrl-C. Defaults to `true`.
+handle_sigterm : Union[bool, None]
+    Close the browser process on SIGTERM. Defaults to `true`.
+handle_sighup : Union[bool, None]
+    Close the browser process on SIGHUP. Defaults to `true`.
+timeout : Union[float, None]
+    Maximum time in milliseconds to wait for the browser instance to start. Defaults to `30000` (30 seconds). Pass `0`
+    to disable timeout.
+env : Union[Dict[str, Union[bool, float, str]], None]
+    Specify environment variables that will be visible to the browser. Defaults to `process.env`.
+headless : Union[bool, None]
+    Whether to run browser in headless mode. More details for
+    [Chromium](https://developers.google.com/web/updates/2017/04/headless-chrome) and
+    [Firefox](https://hacks.mozilla.org/2017/12/using-headless-mode-in-firefox/). Defaults to `true`.
+proxy : Union[{server: str, bypass: Union[str, None], username: Union[str, None], password: Union[str, None]}, None]
+    Network proxy settings.
+downloads_path : Union[pathlib.Path, str, None]
+    If specified, accepted downloads are downloaded into this directory. Otherwise, temporary directory is created and
+    is deleted when browser is closed. In either case, the downloads are deleted when the browser context they were
+    created in is closed.
+slow_mo : Union[float, None]
+    Slows down Playwright operations by the specified amount of milliseconds. Useful so that you can see what is going
+    on.
+viewport : Union[{width: int, height: int}, None]
+    Sets a consistent viewport for each page. Defaults to an 1280x720 viewport. `no_viewport` disables the fixed
+    viewport. Learn more about [viewport emulation](../emulation.md#viewport).
+screen : Union[{width: int, height: int}, None]
+    Emulates consistent window screen size available inside web page via `window.screen`. Is only used when the
+    `viewport` is set.
+no_viewport : Union[bool, None]
+    Does not enforce fixed viewport, allows resizing window in the headed mode.
+ignore_https_errors : Union[bool, None]
+    Whether to ignore HTTPS errors when sending network requests. Defaults to `false`.
+java_script_enabled : Union[bool, None]
+    Whether or not to enable JavaScript in the context. Defaults to `true`. Learn more about
+    [disabling JavaScript](../emulation.md#javascript-enabled).
+bypass_csp : Union[bool, None]
+    Toggles bypassing page's Content-Security-Policy. Defaults to `false`.
+user_agent : Union[str, None]
+    Specific user agent to use in this context.
+locale : Union[str, None]
+    Specify user locale, for example `en-GB`, `de-DE`, etc. Locale will affect `navigator.language` value,
+    `Accept-Language` request header value as well as number and date formatting rules. Defaults to the system default
+    locale. Learn more about emulation in our [emulation guide](../emulation.md#locale--timezone).
+timezone_id : Union[str, None]
+    Changes the timezone of the context. See
+    [ICU's metaZones.txt](https://cs.chromium.org/chromium/src/third_party/icu/source/data/misc/metaZones.txt?rcl=faee8bc70570192d82d2978a71e2a615788597d1)
+    for a list of supported timezone IDs. Defaults to the system timezone.
+geolocation : Union[{latitude: float, longitude: float, accuracy: Union[float, None]}, None]
+permissions : Union[Sequence[str], None]
+    A list of permissions to grant to all pages in this context. See `browser_context.grant_permissions()` for
+    more details. Defaults to none.
+extra_http_headers : Union[Dict[str, str], None]
+    An object containing additional HTTP headers to be sent with every request. Defaults to none.
+offline : Union[bool, None]
+    Whether to emulate network being offline. Defaults to `false`. Learn more about
+    [network emulation](../emulation.md#offline).
+http_credentials : Union[{username: str, password: str, origin: Union[str, None], send: Union["always", "unauthorized", None]}, None]
+    Credentials for [HTTP authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication). If no
+    origin is specified, the username and password are sent to any servers upon unauthorized responses.
+device_scale_factor : Union[float, None]
+    Specify device scale factor (can be thought of as dpr). Defaults to `1`. Learn more about
+    [emulating devices with device scale factor](../emulation.md#devices).
+is_mobile : Union[bool, None]
+    Whether the `meta viewport` tag is taken into account and touch events are enabled. isMobile is a part of device,
+    so you don't actually need to set it manually. Defaults to `false` and is not supported in Firefox. Learn more
+    about [mobile emulation](../emulation.md#ismobile).
+has_touch : Union[bool, None]
+    Specifies if viewport supports touch events. Defaults to false. Learn more about
+    [mobile emulation](../emulation.md#devices).
+color_scheme : Union["dark", "light", "no-preference", "null", None]
+    Emulates [prefers-colors-scheme](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-color-scheme)
+    media feature, supported values are `'light'` and `'dark'`. See `page.emulate_media()` for more details.
+    Passing `'null'` resets emulation to system defaults. Defaults to `'light'`.
+reduced_motion : Union["no-preference", "null", "reduce", None]
+    Emulates `'prefers-reduced-motion'` media feature, supported values are `'reduce'`, `'no-preference'`. See
+    `page.emulate_media()` for more details. Passing `'null'` resets emulation to system defaults. Defaults to
+    `'no-preference'`.
+forced_colors : Union["active", "none", "null", None]
+    Emulates `'forced-colors'` media feature, supported values are `'active'`, `'none'`. See
+    `page.emulate_media()` for more details. Passing `'null'` resets emulation to system defaults. Defaults to
+    `'none'`.
+contrast : Union["more", "no-preference", "null", None]
+    Emulates `'prefers-contrast'` media feature, supported values are `'no-preference'`, `'more'`. See
+    `page.emulate_media()` for more details. Passing `'null'` resets emulation to system defaults. Defaults to
+    `'no-preference'`.
+accept_downloads : Union[bool, None]
+    Whether to automatically download all the attachments. Defaults to `true` where all the downloads are accepted.
+traces_dir : Union[pathlib.Path, str, None]
+    If specified, traces are saved into this directory.
+artifacts_dir : Union[pathlib.Path, str, None]
+    If specified, artifacts (traces, videos, downloads, HAR files, etc.) are saved into this directory. The directory
+    is not cleaned up when the browser closes. If not specified, a temporary directory is used and cleaned up when the
+    browser closes.
+chromium_sandbox : Union[bool, None]
+    Enable Chromium sandboxing. Defaults to `false`.
+firefox_user_prefs : Union[Dict[str, Union[bool, float, str]], None]
+    Firefox user preferences. Learn more about the Firefox user preferences at
+    [`about:config`](https://support.mozilla.org/en-US/kb/about-config-editor-firefox).
+
+    You can also provide a path to a custom [`policies.json` file](https://mozilla.github.io/policy-templates/) via
+    `PLAYWRIGHT_FIREFOX_POLICIES_JSON` environment variable.
+record_har_path : Union[pathlib.Path, str, None]
+    Enables [HAR](http://www.softwareishard.com/blog/har-12-spec) recording for all pages into the specified HAR file
+    on the filesystem. If not specified, the HAR is not recorded. Make sure to call `browser_context.close()`
+    for the HAR to be saved.
+record_har_omit_content : Union[bool, None]
+    Optional setting to control whether to omit request content from the HAR. Defaults to `false`.
+record_video_dir : Union[pathlib.Path, str, None]
+    Enables video recording for all pages into the specified directory. If not specified videos are not recorded. Make
+    sure to call `browser_context.close()` for videos to be saved.
+record_video_size : Union[{width: int, height: int}, None]
+    Dimensions of the recorded videos. If not specified the size will be equal to `viewport` scaled down to fit into
+    800x800. If `viewport` is not configured explicitly the video size defaults to 800x450. Actual picture of each page
+    will be scaled down if necessary to fit the specified size.
+base_url : Union[str, None]
+    When using `page.goto()`, `page.route()`, `page.wait_for_url()`,
+    `page.expect_request()`, or `page.expect_response()` it takes the base URL in consideration by
+    using the [`URL()`](https://developer.mozilla.org/en-US/docs/Web/API/URL/URL) constructor for building the
+    corresponding URL. Unset by default. Examples:
+    - baseURL: `http://localhost:3000` and navigating to `/bar.html` results in `http://localhost:3000/bar.html`
+    - baseURL: `http://localhost:3000/foo/` and navigating to `./bar.html` results in
+      `http://localhost:3000/foo/bar.html`
+    - baseURL: `http://localhost:3000/foo` (without trailing slash) and navigating to `./bar.html` results in
+      `http://localhost:3000/bar.html`
+strict_selectors : Union[bool, None]
+    If set to true, enables strict selectors mode for this context. In the strict selectors mode all operations on
+    selectors that imply single target DOM element will throw when more than one element matches the selector. This
+    option does not affect any Locator APIs (Locators are always strict). Defaults to `false`. See `Locator` to learn
+    more about the strict mode.
+service_workers : Union["allow", "block", None]
+    Whether to allow sites to register Service workers. Defaults to `'allow'`.
+    - `'allow'`: [Service Workers](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API) can be
+      registered.
+    - `'block'`: Playwright will block all registration of Service Workers.
+record_har_url_filter : Union[Pattern[str], str, None]
+record_har_mode : Union["full", "minimal", None]
+    When set to `minimal`, only record information necessary for routing from HAR. This omits sizes, timing, page,
+    cookies, security and other types of HAR information that are not used when replaying from HAR. Defaults to `full`.
+record_har_content : Union["attach", "embed", "omit", None]
+    Optional setting to control resource content management. If `omit` is specified, content is not persisted. If
+    `attach` is specified, resources are persisted as separate files and all of these files are archived along with the
+    HAR file. Defaults to `embed`, which stores content inline the HAR file as per HAR specification.
+client_certificates : Union[Sequence[{origin: str, certPath: Union[pathlib.Path, str, None], cert: Union[bytes, None], keyPath: Union[pathlib.Path, str, None], key: Union[bytes, None], pfxPath: Union[pathlib.Path, str, None], pfx: Union[bytes, None], passphrase: Union[str, None]}], None]
+    TLS Client Authentication allows the server to request a client certificate and verify it.
+
+    **Details**
+
+    An array of client certificates to be used. Each certificate object must have either both `certPath` and `keyPath`,
+    a single `pfxPath`, or their corresponding direct value equivalents (`cert` and `key`, or `pfx`). Optionally,
+    `passphrase` property should be provided if the certificate is encrypted. The `origin` property should be provided
+    with an exact match to the request origin that the certificate is valid for.
+
+    Client certificate authentication is only active when at least one client certificate is provided. If you want to
+    reject all client certificates sent by the server, you need to provide a client certificate with an `origin` that
+    does not match any of the domains you plan to visit.
+
+    **NOTE** When using WebKit on macOS, accessing `localhost` will not pick up client certificates. You can make it
+    work by replacing `localhost` with `local.playwright`.
+
+
+Returns
+-------
+BrowserContext

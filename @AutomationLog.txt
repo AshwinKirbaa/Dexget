@@ -1,0 +1,7 @@
+2026-10-01 10:22:28.875 windows_system.py[151] _click_quick_setting_button -> 
+[WinError -2147221008] CoInitialize has not been called
+Can not load UIAutomationCore.dll.
+1, You may need to install Windows Update KB971513 if your OS is Windows XP, see https://github.com/yinkaisheng/WindowsUpdateKB971513ForIUIAutomation
+2, You need to use an UIAutomationInitializerInThread object if use uiautomation in a thread, see demos/uiautomation_in_thread.py
+2026-10-01 10:46:18.873 test_toggle_click.py[32] test_toggle -> Can not move cursor. ButtonControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {AutomationId: 'Microsoft.QuickAction.BlueLightReduction', ControlType: ButtonControl}
+2026-10-01 10:46:20.376 test_toggle_click.py[39] test_toggle -> Can not move cursor. ButtonControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {AutomationId: 'Microsoft.QuickAction.BlueLightReduction', ControlType: ButtonControl}
