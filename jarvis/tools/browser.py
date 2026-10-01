@@ -17,11 +17,11 @@ _BY_MAP = {
     "name": By.NAME, "text": By.LINK_TEXT, "tag": By.TAG_NAME,
 }
 
-from jarvis.tools.browser_engine import _engine as browser_engine, ContextMode, BrowserTabManager, BrowserContextFactory
+from jarvis.tools.browser_engine import _engine as browser_engine, ContextMode, BrowserTabManager, ElementLocator
 
 class LegacyBrowserAdapter:
     def __init__(self):
-        self.factory = BrowserContextFactory()
+        self.factory = browser_engine.factory
 
     def get_driver(self):
         ctx = self.factory.get_context(ContextMode.DEFAULT_ACCOUNT)
@@ -64,8 +64,7 @@ def browser_open(url: str, new_tab: bool = True) -> ToolResult:
             driver.get(url)
         return ToolResult(True, output=url, observation=f"Opened {url} in browser.")
     except Exception as exc:
-        _manager.recover()
-        return ToolResult(False, error=str(exc), observation="The browser window was closed or invalid. Session has been recovered. Please try again.")
+        return ToolResult(False, error=str(exc), observation=f"Could not open browser: {exc}")
 
 def open_url(url: str) -> ToolResult:
     return browser_open(url, new_tab=True)
@@ -87,33 +86,30 @@ def browser_refresh() -> ToolResult:
     except Exception as e:
         return ToolResult(False, error=str(e), observation=f"Failed to refresh: {str(e)}")
 
-def browser_find_element(by: str, selector: str) -> ToolResult:
-    # Deprecated in favor of observe, but keep for compatibility
-    return ToolResult(True, observation="Please use browser_observe to see the whole page instead.")
+def browser_find_element(selector: str, by: str = None) -> ToolResult:
+    try:
+        element = ElementLocator.locate(_manager.get_driver(), selector, by)
+        data = {"text": element.text, "tag": element.tag_name,
+                "value": "[redacted]" if element.get_attribute("type") == "password"
+                else element.get_attribute("value")}
+        return ToolResult(True, output=data, observation=f"Read element {selector!r}")
+    except Exception as exc:
+        return ToolResult(False, error=str(exc), observation=f"Could not read element: {exc}")
 
 def browser_click(selector: str, by: str = None) -> ToolResult:
     res = browser_engine.execute_task("click", target=selector, params={"by": by})
     if res.get("success"):
-        return ToolResult(True, observation=f"Clicked element {selector!r}")
-    return ToolResult(False, error=res.get("message"), observation=f"Could not click {selector!r}: {res.get('message')}")
+        return ToolResult(True, output=res.get("data"), observation=f"Clicked element {selector!r}")
+    return ToolResult(False, error=res.get("message"), observation=f"Could not click {selector!r} (by={by!r}): {res.get('message')}. Try browser_observe and use a current selector with by='css'.")
 
 def browser_type(selector: str, text: str, submit: bool = False, by: str = None) -> ToolResult:
-    res = browser_engine.execute_task("type", target=selector, params={"by": by, "text": text})
+    res = browser_engine.execute_task("type", target=selector, params={"by": by, "text": text, "submit": submit})
     if res.get("success"):
-        if submit:
-            # simple submit hack for now
-            try:
-                driver = _manager.get_driver()
-                from jarvis.tools.browser_engine import ElementLocator
-                el = ElementLocator.locate(driver, selector, by)
-                el.send_keys(Keys.RETURN)
-            except:
-                pass
-        return ToolResult(True, observation=f"Typed into {selector!r}: {text!r}")
-    return ToolResult(False, error=res.get("message"), observation=f"Could not type into {selector!r}: {res.get('message')}")
+        return ToolResult(True, output=res.get("data"), observation=f"Typed into {selector!r}. Observe to verify the result.")
+    return ToolResult(False, error=res.get("message"), observation=f"Could not type into {selector!r} (by={by!r}): {res.get('message')}. Try browser_observe and use a current selector with by='css'.")
 
 def browser_get_text(selector: str, by: str = None) -> ToolResult:
-    return ToolResult(True, observation="Please use browser_observe to see the whole page instead.")
+    return browser_find_element(selector, by)
 
 def browser_get_links(max_links: int = 30) -> ToolResult:
     try:
@@ -140,19 +136,12 @@ def browser_screenshot(path: str) -> ToolResult:
     except Exception as e:
         return ToolResult(False, error=str(e), observation=f"Failed to save screenshot: {str(e)}")
 
-def browser_observe() -> ToolResult:
+def browser_observe(offset: int = 0) -> ToolResult:
     try:
-        res = browser_engine.execute_task("observe")
+        res = browser_engine.execute_task("observe", params={"offset": offset})
         if res.get("success"):
             data = res.get("data", {})
-            if data.get("url") == "data:," and not data.get("title") and not data.get("elements"):
-                _manager.recover()
-                return ToolResult(False, error="session_stale", observation="Browser session is not ready or page is blank. Session has been recovered. Please try navigating again.")
-                
-            import json
-            # Only show first 50 elements to not overload LLM
-            data_str = json.dumps(data, indent=2)
-            return ToolResult(True, output=data_str, observation=f"Observed page state:\n{data_str}")
+            return ToolResult(True, output=data, observation=f"Observed {data.get('url', 'page')}")
         return ToolResult(False, error=res.get("message"), observation=res.get("message"))
     except Exception as e:
         return ToolResult(False, error=str(e), observation=str(e))
@@ -160,6 +149,42 @@ def browser_observe() -> ToolResult:
 def browser_close() -> ToolResult:
     _manager.close()
     return ToolResult(True, observation="Closed browser session")
+
+def browser_tabs() -> ToolResult:
+    driver = _manager.get_driver()
+    current = driver.current_window_handle
+    tabs = []
+    try:
+        for handle in driver.window_handles:
+            driver.switch_to.window(handle)
+            tabs.append({"handle": handle, "url": driver.current_url,
+                         "title": driver.title, "active": handle == current})
+    finally:
+        driver.switch_to.window(current)
+    return ToolResult(True, output=tabs, observation=f"Found {len(tabs)} tabs.")
+
+
+def browser_switch_tab(handle: str) -> ToolResult:
+    _manager.get_driver().switch_to.window(handle)
+    return browser_observe()
+
+
+def browser_frame(index: int = -1) -> ToolResult:
+    driver = _manager.get_driver()
+    if index == -1:
+        driver.switch_to.default_content()
+    else:
+        frames = driver.find_elements(By.CSS_SELECTOR, "iframe,frame")
+        if index < 0 or index >= len(frames):
+            return ToolResult(False, error="invalid_frame", observation="Frame index does not exist.")
+        driver.switch_to.frame(frames[index])
+    return browser_observe()
+
+
+def browser_select(selector: str, text: str, by: str = "css") -> ToolResult:
+    from selenium.webdriver.support.ui import Select
+    Select(ElementLocator.locate(_manager.get_driver(), selector, by)).select_by_visible_text(text)
+    return ToolResult(True, observation=f"Selected {text!r}. Observe the page to verify.")
 
 def youtube_play(query: str) -> ToolResult:
     """Specialized deterministic handler for 'play X on youtube'."""
@@ -180,6 +205,30 @@ def youtube_play(query: str) -> ToolResult:
     except Exception as exc:
         return ToolResult(False, error=str(exc), observation=f"Could not play '{query}' on YouTube: {exc}")
 
+def youtube_music_play(query: str) -> ToolResult:
+    """Specialized deterministic handler for 'play X on youtube music'."""
+    try:
+        _manager.new_tab()
+        driver = _manager.get_driver()
+        
+        # We also append "song" to give better music hits when searching via query params
+        search_query = query if query.lower().endswith('song') or query.lower().endswith('audio') else query + ' audio'
+        encoded = urllib.parse.quote(search_query)
+        url = f"https://music.youtube.com/search?q={encoded}"
+        driver.get(url)
+        
+        # Give YTM some time to load search results
+        # YTM uses different selectors. Easiest is to wait for the first playable item.
+        # usually under <ytmusic-responsive-list-item-renderer> or <ytmusic-play-button-renderer>
+        selector = "ytmusic-play-button-renderer"
+        el = WebDriverWait(driver, 15).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+        )
+        el.click()
+        return ToolResult(True, observation=f"Playing '{query}' on YouTube Music")
+    except Exception as exc:
+        return ToolResult(False, error=str(exc), observation=f"Could not play '{query}' on YouTube Music: {exc}")
+
 
 def register(registry) -> None:
     common = {
@@ -187,7 +236,16 @@ def register(registry) -> None:
         "selector": {"type": "str", "required": True, "description": "The exact locator string, or visible text if by is omitted"},
     }
     registry.register(Tool("browser_observe", "Observe the current webpage and return interactive elements (MUST USE BEFORE INTERACTING)",
-                            {}, RiskLevel.LOW, browser_observe, "browser"))
+                            {"offset": {"type": "int", "description": "Skip this many interactive elements to inspect later controls."}},
+                            RiskLevel.LOW, browser_observe, "browser"))
+    registry.register(Tool("browser_tabs", "List controlled browser tabs and handles.",
+                            {}, RiskLevel.LOW, browser_tabs, "browser"))
+    registry.register(Tool("browser_switch_tab", "Switch to a handle returned by browser_tabs.",
+                            {"handle": {"type": "str", "required": True}}, RiskLevel.LOW, browser_switch_tab, "browser"))
+    registry.register(Tool("browser_frame", "Observe an iframe by index; -1 returns to the main document.",
+                            {"index": {"type": "int"}}, RiskLevel.LOW, browser_frame, "browser"))
+    registry.register(Tool("browser_select", "Choose a visible option in a select dropdown.",
+                            {**common, "text": {"type": "str", "required": True}}, RiskLevel.LOW, browser_select, "browser"))
     registry.register(Tool("browser_open", "Open a URL in the browser in a new tab.",
                             {"url": {"type": "str", "required": True}}, RiskLevel.LOW, browser_open, "browser"))
     registry.register(Tool("browser_navigate", "Navigate the current browser tab to a URL.",
@@ -212,3 +270,5 @@ def register(registry) -> None:
     registry.register(Tool("browser_close", "Close the browser session.", {}, RiskLevel.LOW, browser_close, "browser"))
     registry.register(Tool("youtube_play", "Fast-path specialized handler to search and play a YouTube video directly.",
                             {"query": {"type": "str", "required": True}}, RiskLevel.LOW, youtube_play, "browser"))
+    registry.register(Tool("youtube_music_play", "Fast-path specialized handler to search and play a song on YouTube Music directly.",
+                            {"query": {"type": "str", "required": True}}, RiskLevel.LOW, youtube_music_play, "browser"))

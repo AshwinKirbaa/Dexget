@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Optional
+from threading import Lock
 
 from jarvis.agent.executor import Executor, ExecutorConfig, ExecutionOutcome
 from jarvis.agent.planner import LLMFn
@@ -37,11 +38,28 @@ class Agent:
                  config: Optional[ExecutorConfig] = None,
                  on_progress: Optional[Callable[[str], None]] = None):
         self.registry = registry
+        self.command_lock = Lock()
         self.llm_fn = llm_fn
         self.fast_path_fn = fast_path_fn
         self.executor = Executor(registry, llm_fn, config=config, on_progress=on_progress)
 
+    def cancel(self) -> None:
+        self.registry.cancel_event.set()
+        self.executor.pending_task = None
+
     def handle(self, user_input: str) -> AgentResponse:
+        if (user_input or "").strip().lower() in ("stop", "cancel"):
+            self.cancel()
+            return AgentResponse("Task stopped.", False)
+        if not self.command_lock.acquire(blocking=False):
+            return AgentResponse("A task is running. Use Stop before starting another task.", False)
+        try:
+            self.registry.cancel_event.clear()
+            return self._handle(user_input)
+        finally:
+            self.command_lock.release()
+
+    def _handle(self, user_input: str) -> AgentResponse:
         user_input = (user_input or "").strip()
         if not user_input:
             return AgentResponse(text="I didn't catch a command.", used_agent_loop=False)

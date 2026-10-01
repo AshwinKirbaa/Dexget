@@ -7,6 +7,7 @@ dedicated, explicitly-confirmed tool if ever needed - not ad hoc shell text).
 from __future__ import annotations
 
 import subprocess
+import os
 from typing import Optional
 
 from jarvis.security.permissions import classify_command_risk, redact_secrets
@@ -50,4 +51,26 @@ def register(registry) -> None:
             "are refused outright by this tool."
         ),
         parameters={"command": {"type": "str", "required": True}},
-        risk_level=RiskLevel.MEDIUM, func=run_command, category="terminal"))
+        risk_level=RiskLevel.HIGH, func=run_command, category="terminal"))
+    if os.name == "nt":
+        registry.register(Tool(
+            name="terminal_powershell",
+            description="Run PowerShell for Windows tasks beyond the dedicated tools. Requires approval.",
+            parameters={"command": {"type": "str", "required": True}},
+            risk_level=RiskLevel.HIGH, func=run_powershell, category="terminal"))
+
+
+def run_powershell(command: str) -> ToolResult:
+    try:
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, errors="replace", timeout=TIMEOUT_SECONDS,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        data = {"stdout": redact_secrets(proc.stdout[-16000:]),
+                "stderr": redact_secrets(proc.stderr[-4000:]), "returncode": proc.returncode}
+        return ToolResult(proc.returncode == 0, output=data,
+                          error=None if proc.returncode == 0 else f"exit={proc.returncode}",
+                          observation=f"PowerShell exited with code {proc.returncode}.")
+    except subprocess.TimeoutExpired:
+        return ToolResult(False, error="timeout", observation=f"PowerShell timed out after {TIMEOUT_SECONDS}s.")

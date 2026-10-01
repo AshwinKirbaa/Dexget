@@ -39,6 +39,7 @@ class RouteType(str, Enum):
     CONVERSATION = "conversation"
     INFORMATION = "information"
     FILESYSTEM = "filesystem"
+    TASK = "task"
 
 
 @dataclass
@@ -380,23 +381,35 @@ def _try_memory(cmd: str) -> Optional[RouteResult]:
         m = re.match(pat, cmd, re.IGNORECASE)
         if m:
             val = m.group(1).strip()
-            # simple check for get vs set is already done if we match these prefixes (they are setters)
+            
+            # Extract "my X is Y" to store as key=X, value=Y
+            sm = re.match(r"^my\s+(.+?)\s+(?:is|are|was|were)\s+(.+)$", val, re.IGNORECASE)
+            if sm:
+                key = sm.group(1).strip()
+                value = sm.group(2).strip()
+                key_formatted = key.replace(" ", "_").lower()
+                return _memory("set", key_formatted, value, f"Remembering that your {key} is {value}")
+                
             return _memory("set", "preference", val, f"Remembering your preference: {val}")
 
     # Set exact preferences based on old regexes (keep them for backward compatibility if needed, but the above catches most)
     m = re.match(r"^my\s+(.+?)\s+is\s+(.+)$", cmd, re.IGNORECASE)
     if m:
         key, value = m.group(1).strip(), m.group(2).strip()
-        return _memory("set", key, value, f"Remembering that your {key} is {value}")
+        key_formatted = key.replace(" ", "_").lower()
+        return _memory("set", key_formatted, value, f"Remembering that your {key} is {value}")
 
     # Get preferences
-    m = re.match(r"^(?:what(?:'s| is)|tell me|do you know|who am i(?:\s+what is my name)?)\s*(?:my)?\s*(.+?)[\s?!.]*$", cmd, re.IGNORECASE)
+    # We require 'my' for generic preference lookups to avoid capturing 'what is RAG'
+    m = re.match(r"^(?:what(?:'s| is)|tell me|do you know|who am i(?:\s+what is my name)?)\s+my\s+(.+?)[\s?!.]*$", cmd, re.IGNORECASE)
     if m:
         key = m.group(1).strip()
-        if key in ("name", "college", "course", "age", "birthday", "email", "phone"):
-            return _memory("get", key, label=f"Looking up {key}")
-        if cmd.lower().strip() in ("who am i", "what is my name", "whats my name", "tell me my name"):
-            return _memory("get", "name", label="Looking up name")
+        key_formatted = key.replace(" ", "_").lower()
+        return _memory("get", key_formatted, label=f"Looking up {key}")
+
+    # Also handle specific identity questions without 'my'
+    if cmd.lower().strip() in ("who am i", "what is my name", "whats my name", "tell me my name"):
+        return _memory("get", "name", label="Looking up name")
         
     m = re.match(r"^(?:what|which)\s+(?:browser|editor|language)\s+(?:do i\s+)?(?:prefer|use|like)[\s?!.]*$", cmd, re.IGNORECASE)
     if m:
@@ -447,52 +460,70 @@ def _try_document_ingestion(cmd: str) -> Optional[RouteResult]:
 
 def _try_youtube(cmd: str) -> Optional[RouteResult]:
     """'play X on youtube', 'youtube X', 'search X on youtube'"""
+    if "youtube music" in cmd.lower():
+        return None
+        
     patterns = [
-        r"^play\s+(.+?)\s+(?:on\s+)?youtube$",
-        r"^(?:search|find|look\s+up)\s+(.+?)\s+on\s+youtube$",
+        r"^play\s+(.+?)\s+(?:(?:on|in)\s+)?youtube$",
+        r"^(?:search|find|look\s+up)\s+(.+?)\s+(?:(?:on|in)\s+)?youtube$",
         r"^(?:search|find|look\s+up)\s+youtube\s+for\s+(.+)$",
         r"^youtube\s+(?:search\s+for\s+|play\s+|search\s+)?(.+)$",
-        r"^(?:watch|stream)\s+(.+?)\s+(?:on\s+)?youtube$",
-        r"^(?:open\s+(?:\w+)[,\s]+)?search\s+(.+?)\s+on\s+youtube\s+and\s+play(?:\s+it|\s+the\s+video(?:\s+song)?)?[\s.!]*$",
-        r"^(?:open\s+(?:\w+)[,\s]+)?search\s+(.+?)\s+(?:on\s+youtube|and\s+play(?:\s+it|\s+the\s+video(?:\s+song)?)?)[\s.!]*$",
-        r"^(?:go\s+to\s+youtube\s+and\s+)?play\s+(.+?)(?:\s+on\s+youtube)?[\s.!]*$",
+        r"^(?:watch|stream)\s+(.+?)\s+(?:(?:on|in)\s+)?youtube$",
+        r"^(?:open\s+(?:\w+)[,\s]+)?search\s+(.+?)\s+(?:(?:on|in)\s+)?youtube\s+and\s+play(?:\s+it|\s+the\s+video(?:\s+song)?)?[\s.!]*$",
+        r"^(?:open\s+(?:\w+)[,\s]+)?search\s+(.+?)\s+(?:(?:on|in)\s+youtube|and\s+play(?:\s+it|\s+the\s+video(?:\s+song)?)?)[\s.!]*$",
+        r"^(?:go\s+to\s+youtube\s+and\s+)?play\s+(.+?)(?:\s+(?:on|in)\s+youtube)?[\s.!]*$",
     ]
     for pat in patterns:
         m = re.match(pat, cmd, re.IGNORECASE)
         if m:
             query = m.group(1).strip()
-            # If the user also explicitly asked to open a browser first, e.g., "open brave, search X on youtube..."
-            # we will just use the youtube_play tool because it opens the browser itself.
-            return _browser("youtube_play", {"query": query}, f"Playing '{query}' on YouTube")
+            return RouteResult(RouteType.TASK, tool_name="youtube_play", tool_args={"query": query}, label=f"Playing '{query}' on YouTube")
+    return None
+
+def _try_youtube_music(cmd: str) -> Optional[RouteResult]:
+    """'play X in youtube music', 'youtube music X', 'search X on youtube music'"""
+    patterns = [
+        r"^play\s+(.+?)\s+(?:in|on)\s+youtube\s+music$",
+        r"^(?:search|find|look\s+up)\s+(.+?)\s+(?:in|on)\s+youtube\s+music$",
+        r"^youtube\s+music\s+(?:search\s+for\s+|play\s+|search\s+)?(.+)$",
+        r"^(?:listen\s+to|stream)\s+(.+?)\s+(?:in|on)\s+youtube\s+music$",
+    ]
+    for pat in patterns:
+        m = re.match(pat, cmd, re.IGNORECASE)
+        if m:
+            query = m.group(1).strip()
+            return RouteResult(RouteType.TASK, tool_name="youtube_music_play", tool_args={"query": query}, label=f"Playing '{query}' on YouTube Music")
     return None
 
 
 def _try_open_site(cmd: str) -> Optional[RouteResult]:
-    """'open youtube', 'open google.com', 'go to github'"""
-    m = re.match(r"^(?:open|go\s+to|visit|browse|navigate\s+to|show\s+me)\s+(.+?)(?:\s+in\s+browser)?[\s.!]*$", cmd, re.IGNORECASE)
+    """'open youtube', 'open google.com', 'go to github', 'open gmail in brave professional account'"""
+    from jarvis.tasks.accounts import account_manager
+    cmd_clean, account_override = account_manager.extract_account_alias(cmd)
+    
+    m = re.match(r"^(?:open|go\s+to|visit|browse|navigate\s+to|show\s+me)\s+(.+?)(?:\s+in\s+(?:the\s+)?(chrome|brave|edge|firefox|browser))?[\s.!]*$", cmd_clean, re.IGNORECASE)
     if not m:
         return None
     target = m.group(1).strip().lower()
+    browser_override = m.group(2).strip().lower() if m.group(2) else None
 
-    # Explicitly asking to open a desktop app in browser? (Handled if it falls through to site or not)
-    
     # Exact known site
     if target in KNOWN_SITES:
         url = KNOWN_SITES[target]
-        return _browser("browser_open", {"url": url}, f"Opening {target.title()} in browser")
+        return RouteResult(RouteType.TASK, tool_name="web_open", tool_args={"url": url, "site_name": target, "account_override": account_override, "browser_override": browser_override}, label=f"Opening {target.title()} in browser")
 
     # Looks like a URL (has a TLD)
     if re.match(r"^[\w.-]+\.(com|org|net|io|dev|ai|co|gov|edu|me|app|uk|in)(/.*)?$", target):
         url = target if target.startswith("http") else f"https://{target}"
-        return _browser("browser_open", {"url": url}, f"Opening {target} in browser")
+        site_name = target.split(".")[0]
+        return RouteResult(RouteType.TASK, tool_name="web_open", tool_args={"url": url, "site_name": site_name, "account_override": account_override, "browser_override": browser_override}, label=f"Opening {target} in browser")
 
     # If user explicitly requested "in browser" but it isn't a known site, it goes to search
-    if "in browser" in cmd.lower():
+    if "in browser" in cmd.lower() or browser_override:
         url = f"https://www.google.com/search?q={urllib.parse.quote(target)}"
         return _search("browser_open", {"url": url}, f"Searching {target} in browser")
 
     return None
-
 
 def _try_open_and_type(cmd: str) -> Optional[RouteResult]:
     """'open notepad and type hello world', 'open new notepad and type my actual name'"""
@@ -515,13 +546,23 @@ def _try_open_and_type(cmd: str) -> Optional[RouteResult]:
 
 def _try_open_app(cmd: str) -> Optional[RouteResult]:
     """'open notepad', 'launch calculator', 'start powershell'"""
+    from jarvis.tasks.accounts import account_manager
+    cmd_clean, account_override = account_manager.extract_account_alias(cmd)
+    
     # Use the new ApplicationIntentParser
-    intent = ApplicationIntentParser.parse(cmd)
+    intent = ApplicationIntentParser.parse(cmd_clean)
     if not intent:
         return None
         
     app_key = intent.application.lower()
     
+    # Extract browser override if any
+    browser_match = re.match(r"^(.+?)\s+in\s+(chrome|brave|edge|firefox|browser)$", app_key)
+    browser_override = None
+    if browser_match:
+        app_key = browser_match.group(1)
+        browser_override = browser_match.group(2)
+        
     profile_match = re.match(r"^(.+?)\s+(?:in|with)\s+(.+?)(?:\s+profile)?$", app_key)
     if profile_match and profile_match.group(1) in ["brave", "chrome", "google chrome", "edge", "firefox", "browser"]:
         app_key = profile_match.group(1)
@@ -539,9 +580,21 @@ def _try_open_app(cmd: str) -> Optional[RouteResult]:
     from jarvis.tools.application_resolver import find_installed_application
     app_info = find_installed_application(app)
     if not app_info["installed"] and not app_info.get("web_fallback"):
-        # Not installed and no web fallback, so it's not a known application. 
-        # Return None to let it fall through to generic web search or agent.
-        return None
+        # Check if this is EXPLICITLY meant to be an application.
+        # If not explicit, return None so it can fall through to filesystem, browser, or agent.
+        verb_match = re.match(r"^([a-zA-Z]+)", cmd)
+        verb = verb_match.group(1).lower() if verb_match else "open"
+        
+        is_explicit = False
+        if verb in ["launch", "start", "run", "execute"]:
+            is_explicit = True
+        elif "_" in app_key:
+            is_explicit = True
+        elif any(w in app_key.split() for w in ["application", "app", "program"]):
+            is_explicit = True
+            
+        if not is_explicit:
+            return None
         
     if intent.secondary_action:
         return _fast_multi([
@@ -571,7 +624,7 @@ def _try_search(cmd: str) -> Optional[RouteResult]:
         m = re.match(pat, cmd, re.IGNORECASE)
         if m:
             query = m.group(1).strip()
-            url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+            url = f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}"
             return _search("browser_open", {"url": url}, f"Searching Google for '{query}'")
     return None
 
@@ -727,7 +780,7 @@ def _try_browser_search_and_play(cmd: str) -> Optional[RouteResult]:
     m = re.match(r"^(?:open|launch)?\s*(?:brave|chrome|browser|edge|firefox)?\s*search\s+(?:on\s+)?(?:youtube\s+)?(?:for\s+)?(.+?)\s+and\s+play$", cmd, re.IGNORECASE)
     if m:
         query = m.group(1).strip()
-        return _browser("youtube_play", {"query": query}, f"Playing '{query}' on YouTube")
+        return RouteResult(RouteType.TASK, tool_name="youtube_play", tool_args={"query": query}, label=f"Playing '{query}' on YouTube")
     return None
 
 def _try_settings(cmd: str) -> Optional[RouteResult]:
@@ -751,8 +804,8 @@ def _try_compound_workflow(cmd: str) -> Optional[RouteResult]:
     if parsed.primary_intent == "browser_search":
         step = parsed.workflow_steps[0]
         query = step.parameters.get("query", "")
-        url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-        return _search("browser_open", {"url": url}, f"Searching for '{query}' in {parsed.target_application}")
+        profile = step.parameters.get("profile", "")
+        return _fast("win_browser_search", {"browser": parsed.target_application, "profile": profile, "query": query}, f"Searching for '{query}' in {parsed.target_application}", RouteType.WINDOWS)
 
     if parsed.primary_intent == "application_workflow":
         if parsed.target_application == "Calculator":
@@ -798,30 +851,123 @@ def _try_compound_workflow(cmd: str) -> Optional[RouteResult]:
     }
     return RouteResult(RouteType.AGENT, label="COMPOUND_WORKFLOW", text=json.dumps(structure))
 
+def _try_unsupported_actions(cmd: str) -> Optional[RouteResult]:
+    # System modes
+    if re.match(r"^(?:switch|change|set)\s+(?:to\s+)?(?:performance|battery|power saving|balanced)\s+mode[\s.!]*$", cmd, re.IGNORECASE):
+        return RouteResult(RouteType.AGENT, label="Windows workflow")
+    
+    # Discord actions that are unsupported
+    if "discord" in cmd.lower() and ("join" in cmd.lower() or "call" in cmd.lower() or "camera" in cmd.lower() or "mute" in cmd.lower() or "server" in cmd.lower()):
+        return RouteResult(RouteType.AGENT, label="Desktop workflow")
+        
+    return None
+
+def _try_browser_advanced(cmd: str) -> Optional[RouteResult]:
+    # 'open brave in default and search hotstar'
+    m = re.match(r"^(?:open|launch)\s+(brave|chrome|firefox|edge|browser)(?:\s+in\s+([a-zA-Z0-9_]+)(?:\s+profile)?)?\s+and\s+search\s+(.+)$", cmd, re.IGNORECASE)
+    if m:
+        browser, profile, query = m.groups()
+        return _fast("win_browser_search", {"browser": browser, "profile": profile or "default", "query": query}, f"Opening {browser.title()} to search '{query}'", RouteType.WINDOWS)
+        
+    # 'search hotstar in brave' or 'search github in brave in default'
+    m = re.match(r"^search\s+(.+?)\s+in\s+(brave|chrome|firefox|edge|browser)(?:\s+(?:in|with)\s+([a-zA-Z0-9_]+)(?:\s+profile)?)?[\s.!]*$", cmd, re.IGNORECASE)
+    if m:
+        query, browser, profile = m.groups()
+        return _fast("win_browser_search", {"browser": browser, "profile": profile or "default", "query": query}, f"Searching '{query}' in {browser.title()}", RouteType.WINDOWS)
+        
+    return None
+
+def _try_system_control(cmd: str) -> Optional[RouteResult]:
+    """'turn on wifi', 'turn off bluetooth', 'open quick settings', 'connect to Network123'"""
+    # Wifi
+    if re.match(r"^(?:turn|switch)\s+(?:on|off)\s+wi-?fi[\s.!]*$", cmd, re.IGNORECASE) or \
+       re.match(r"^(?:enable|disable)\s+wi-?fi[\s.!]*$", cmd, re.IGNORECASE):
+        if "on" in cmd.lower() or "enable" in cmd.lower():
+            return _fast("sys_wifi_enable", {}, "Enabling Wi-Fi")
+        else:
+            return _fast("sys_wifi_disable", {}, "Disabling Wi-Fi")
+            
+    m = re.match(r"^connect\s+(?:to\s+)?(?:wi-?fi\s+)?(?:network\s+)?(.+)[\s.!]*$", cmd, re.IGNORECASE)
+    if m and not "bluetooth" in cmd.lower():
+        ssid = m.group(1).strip()
+        return _fast("sys_wifi_connect", {"ssid": ssid}, f"Connecting to Wi-Fi {ssid}")
+
+    # Bluetooth
+    if re.match(r"^(?:turn|switch)\s+(?:on|off)\s+bluetooth[\s.!]*$", cmd, re.IGNORECASE) or \
+       re.match(r"^(?:enable|disable)\s+bluetooth[\s.!]*$", cmd, re.IGNORECASE):
+        if "on" in cmd.lower() or "enable" in cmd.lower():
+            return _fast("sys_bluetooth_enable", {}, "Enabling Bluetooth")
+        else:
+            return _fast("sys_bluetooth_disable", {}, "Disabling Bluetooth")
+
+    m = re.match(r"^connect\s+(?:my\s+|the\s+)?(?:bluetooth\s+)?device\s+(.+)[\s.!]*$", cmd, re.IGNORECASE)
+    if not m:
+        m = re.match(r"^connect\s+(?:my\s+|the\s+)?(.+)[\s.!]*$", cmd, re.IGNORECASE)
+        # Avoid conflicting with wifi
+        if m and "wifi" not in cmd.lower():
+            dev = m.group(1).strip()
+            return _fast("sys_bluetooth_connect", {"device_name": dev}, f"Connecting to Bluetooth device {dev}")
+
+    # Airplane mode
+    if re.match(r"^(?:turn|switch)\s+(?:on|off)\s+airplane\s+mode[\s.!]*$", cmd, re.IGNORECASE) or \
+       re.match(r"^(?:enable|disable)\s+airplane\s+mode[\s.!]*$", cmd, re.IGNORECASE):
+        if "on" in cmd.lower() or "enable" in cmd.lower():
+            return _fast("sys_airplane_mode_enable", {}, "Enabling Airplane Mode")
+        else:
+            return _fast("sys_airplane_mode_disable", {}, "Disabling Airplane Mode")
+
+    # Energy saver
+    if re.match(r"^(?:turn|switch)\s+(?:on|off)\s+(?:energy|power)\s+saver[\s.!]*$", cmd, re.IGNORECASE) or \
+       re.match(r"^(?:enable|disable)\s+(?:energy|power)\s+saver[\s.!]*$", cmd, re.IGNORECASE):
+        if "on" in cmd.lower() or "enable" in cmd.lower():
+            return _fast("sys_energy_saver_enable", {}, "Enabling Energy Saver")
+        else:
+            return _fast("sys_energy_saver_disable", {}, "Disabling Energy Saver")
+
+    # Audio Output
+    m = re.match(r"^(?:switch|change|set)\s+(?:audio|output|sound|playback)\s+(?:to\s+)?(.+)[\s.!]*$", cmd, re.IGNORECASE)
+    if m:
+        dev = m.group(1).strip()
+        return _fast("sys_audio_output_set", {"device_name": dev}, f"Switching audio to {dev}")
+
+    # Menus
+    if re.match(r"^open\s+quick\s+settings[\s.!]*$", cmd, re.IGNORECASE):
+        return _fast("sys_quick_settings_open", {}, "Opening Quick Settings")
+    if re.match(r"^open\s+(?:accessibility|ease of access)[\s.!]*$", cmd, re.IGNORECASE):
+        return _fast("sys_accessibility_open", {}, "Opening Accessibility Settings")
+
+    return None
+
 _CHAIN = [
+    # 0. Unsupported actions
+    _try_unsupported_actions,
+    
     # 1. memory/preference/ingestion
     _try_memory,
     _try_document_ingestion,
     
-    # 2. filesystem
-    _try_filesystem,
-    
-    # 3. local media
-    _try_local_media,
-    
-    # 4. application
+    # 2. Advanced workflows/browsers (MUST be before filesystem)
     _try_compound_workflow,
+    _try_browser_advanced,
     _try_open_and_type,
     _try_open_app,
     _try_close_app,
     
-    # 5. browser
+    # 3. browser routes (Check for sites before filesystem catches them as folders)
     _try_browser_search_and_play,
+    _try_youtube_music,
     _try_youtube,
     _try_open_site,
     _try_search,
     
+    # 4. filesystem
+    _try_filesystem,
+    
+    # 5. local media
+    _try_local_media,
+    
     # 6. Windows/system
+    _try_system_control,
     _try_lock,
     _try_settings,
     _try_brightness,
@@ -840,19 +986,35 @@ _CHAIN = [
     _try_conversation,
 ]
 
-def route(command: str) -> RouteResult:
+def route(command: str, explicit_account: Optional[str] = None) -> RouteResult:
     """
     Classify and route a user command.
     Returns a RouteResult — never raises.
     Caller is responsible for executing the route.
     """
+    # Preserve literal URLs before normalization changes case-sensitive paths
+    # and query values. A simple navigation needs no model request.
+    literal_url = re.fullmatch(
+        r"(?:open|go\s+to|visit|browse|navigate\s+to)\s+(https?://\S+)(?:\s+in\s+browser)?",
+        command.strip(), re.IGNORECASE)
+    if literal_url:
+        return _browser("browser_open", {"url": literal_url.group(1)}, "Opening website")
+
     # Use Phase 1 CommandNormalizer
     command = CommandNormalizer.normalize(command)
     
+    result = None
     for recogniser in _CHAIN:
-        result = recogniser(command)
-        if result is not None:
-            return result
+        res = recogniser(command)
+        if res is not None:
+            result = res
+            break
             
-    # Nothing matched: let the agent decide
-    return RouteResult(RouteType.AGENT)
+    if not result:
+        # Nothing matched: let the agent decide
+        result = RouteResult(RouteType.AGENT)
+        
+    if explicit_account and result.route_type == RouteType.TASK:
+        result.tool_args["account_override"] = explicit_account
+        
+    return result

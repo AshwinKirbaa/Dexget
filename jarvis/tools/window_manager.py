@@ -31,6 +31,11 @@ def get_window_text(hwnd):
     user32.GetWindowTextW(hwnd, buf, length + 1)
     return buf.value
 
+def get_class_name(hwnd):
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buf, 256)
+    return buf.value
+
 def get_foreground_window():
     return user32.GetForegroundWindow()
 
@@ -46,11 +51,32 @@ class WindowManager:
         return hwnds
 
     @staticmethod
-    def get_main_window_for_pid(pid):
+    def get_main_window_for_pid(pid, app_name=None):
         hwnds = WindowManager.get_windows_for_pid(pid)
+        
+        # Pass 1: Visible windows with a title (ignoring desktop/taskbar)
         for hwnd in hwnds:
             if is_window_visible(hwnd) and get_window_text(hwnd).strip():
+                cls = get_class_name(hwnd)
+                if cls in ("Progman", "Shell_TrayWnd", "WorkerW"):
+                    continue
                 return hwnd
+                
+        # Pass 2: Hidden/tray windows or specific classes
+        for hwnd in hwnds:
+            cls = get_class_name(hwnd)
+            title = get_window_text(hwnd).lower()
+            
+            if app_name and ("explorer" in app_name.lower()):
+                if cls == "CabinetWClass":
+                    return hwnd
+            elif app_name and ("discord" in app_name.lower()):
+                if "discord" in title:
+                    return hwnd
+            elif app_name and ("chrome" in app_name.lower() or "brave" in app_name.lower()):
+                if cls == "Chrome_WidgetWin_1" and title:
+                    return hwnd
+                    
         return None
 
     @staticmethod

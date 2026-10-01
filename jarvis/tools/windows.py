@@ -83,7 +83,7 @@ def open_application(app_name: str) -> ToolResult:
                 
                 activated = False
                 for pid in pids:
-                    hwnd = wm.WindowManager.get_main_window_for_pid(pid)
+                    hwnd = wm.WindowManager.get_main_window_for_pid(pid, app_name=target)
                     if hwnd:
                         _log(f"[APPLICATION] Restoring {target.title()} window")
                         _log(f"[APPLICATION] Bringing {target.title()} to foreground")
@@ -120,7 +120,7 @@ def open_application(app_name: str) -> ToolResult:
                 pids = get_running_pids(target)
                 if pids:
                     for pid in pids:
-                        hwnd = wm.WindowManager.get_main_window_for_pid(pid)
+                        hwnd = wm.WindowManager.get_main_window_for_pid(pid, app_name=target)
                         if hwnd:
                             _log(f"[APPLICATION] {target.title()} window found")
                             _log(f"[APPLICATION] Activating {target.title()}")
@@ -186,6 +186,77 @@ def open_website(url: str) -> ToolResult:
         return ToolResult(True, output=url, observation=f"Opened {url} in the default browser")
     except Exception as exc:
         return ToolResult(False, error=str(exc), observation=f"Could not open {url}: {exc}")
+
+def win_browser_search(browser: str, query: str, profile: str = None) -> ToolResult:
+    import urllib.parse
+    import time
+    from jarvis.tools.application_resolver import resolve_application, find_installed_application, get_running_pids
+    import jarvis.tools.window_manager as wm
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    default_account = os.getenv("JARVIS_DEFAULT_BRAVE_ACCOUNT", "")
+    
+    def _log(msg): print(f"  {msg}")
+    
+    target = resolve_application(browser)
+    app_info = find_installed_application(target)
+    
+    if not app_info["installed"]:
+        return ToolResult(False, error="not_installed", observation=f"{browser.title()} is not installed.")
+        
+    url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
+    executable = app_info["command"]
+    
+    prof_dir = None
+    if profile and target in ["brave.exe", "chrome.exe", "msedge.exe"]:
+        prof_dir = "Default" if profile.lower() == "default" else profile
+    
+    _log(f"[BROWSER] Resolving default account: {default_account or 'none'}")
+    _log(f"[BROWSER] Searching for existing {target.title()} windows")
+    pids = get_running_pids(target)
+    activated = False
+    
+    if pids:
+        for pid in pids:
+            hwnd = wm.WindowManager.get_main_window_for_pid(pid, app_name=target)
+            if hwnd:
+                _log(f"[BROWSER] Found existing window, activating it...")
+                wm.WindowManager.activate_window(hwnd)
+                if wm.WindowManager.verify_window_active(hwnd):
+                    activated = True
+                    break
+    
+    if activated:
+        _log(f"[BROWSER] Window activated. Sending new tab and search query.")
+        import pyautogui
+        time.sleep(0.3)
+        pyautogui.hotkey('ctrl', 't')
+        time.sleep(0.3)
+        pyautogui.typewrite(url + '\n', interval=0.01)
+        _log(f"[OK] {target.title()} search executed via keyboard.")
+        return ToolResult(True, output=url, observation=f"Opened search for {query} in existing {browser} window.")
+        
+    else:
+        _log(f"[BROWSER] No active window found. Launching {target.title()}.")
+        cmd_args = [executable.replace(".exe", "")]
+        if prof_dir:
+            cmd_args.append(f"--profile-directory={prof_dir}")
+        cmd_args.append(url)
+        
+        subprocess.Popen(cmd_args)
+        
+        for _ in range(10):
+            time.sleep(0.5)
+            pids = get_running_pids(target)
+            for pid in pids:
+                hwnd = wm.WindowManager.get_main_window_for_pid(pid, app_name=target)
+                if hwnd and wm.WindowManager.verify_window_active(hwnd):
+                    _log(f"[OK] {target.title()} search executed via new launch.")
+                    return ToolResult(True, output=url, observation=f"Launched {browser} and searched for {query}.")
+                    
+        return ToolResult(True, output=url, observation=f"Launched {browser} search for {query}, but couldn't verify focus.")
+
 
 
 def get_system_information() -> ToolResult:
@@ -484,12 +555,76 @@ def restart_pc() -> ToolResult:
 # Tool registration
 # ---------------------------------------------------------------------------
 
+def get_pwa_shortcut(app_name: str) -> Optional[str]:
+    import os
+    appdata = os.environ.get('APPDATA')
+    if not appdata: return None
+    start_menu = os.path.join(appdata, 'Microsoft', 'Windows', 'Start Menu', 'Programs')
+    for root, dirs, files in os.walk(start_menu):
+        for file in files:
+            if file.lower() == app_name.lower() + '.lnk':
+                return os.path.join(root, file)
+    return None
+
+def win_youtube_search(query: str, app: str) -> ToolResult:
+    is_music = 'music' in app.lower()
+    
+    # 1. Get Video ID using native urllib to scrape youtube search
+    import urllib.request, urllib.parse, re, json
+    search_query = query
+    if is_music and not query.lower().endswith('song') and not query.lower().endswith('audio'):
+        search_query += ' audio'
+        
+    q = urllib.parse.quote(search_query)
+    url = f'https://www.youtube.com/results?search_query={q}'
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    
+    video_id = None
+    try:
+        html = urllib.request.urlopen(req).read().decode('utf-8')
+        match = re.search(r'var ytInitialData = (\{.*?\});</script>', html)
+        if match:
+            data = json.loads(match.group(1))
+            contents = data['contents']['twoColumnSearchResultsRenderer']['primaryContents']['sectionListRenderer']['contents'][0]['itemSectionRenderer']['contents']
+            for item in contents:
+                if 'videoRenderer' in item:
+                    video_id = item['videoRenderer']['videoId']
+                    title = item['videoRenderer'].get('title', {}).get('runs', [{}])[0].get('text', query)
+                    break
+    except Exception as e:
+        return ToolResult(False, error=str(e), observation=f'Failed to scrape youtube: {e}')
+        
+    if not video_id:
+        return ToolResult(False, error="no_results", observation='Could not find a video for that query.')
+        
+    # 2. Get shortcut and launch
+    shortcut = get_pwa_shortcut(app)
+    if not shortcut:
+        return ToolResult(False, error="not_installed", observation=f'Could not find {app} installed on the system (No Start Menu shortcut found).')
+        
+    try:
+        import win32com.client
+        shell = win32com.client.Dispatch('WScript.Shell')
+        sc = shell.CreateShortCut(shortcut)
+        
+        target = sc.TargetPath
+        args = sc.Arguments
+        
+        play_url = f'https://music.youtube.com/watch?v={video_id}' if is_music else f'https://www.youtube.com/watch?v={video_id}'
+        
+        cmd = f'"{target}" {args} "{play_url}"'
+        subprocess.Popen(cmd, shell=True)
+        return ToolResult(True, output=play_url, observation=f'Found "{title}" and played in {app}')
+    except Exception as e:
+        return ToolResult(False, error=str(e), observation=f'Failed to launch {app}: {e}')
+
 def register(registry) -> None:
     # --- Application management ---
     registry.register(Tool("win_open_application", "Open a desktop application by name.", {"app_name": {"type": "str", "required": True}}, RiskLevel.LOW, open_application, "windows"))
     registry.register(Tool("win_close_application", "Close/kill a running application by name.", {"app_name": {"type": "str", "required": True}}, RiskLevel.MEDIUM, close_application, "windows"))
     registry.register(Tool("win_open_folder", "Open a folder in File Explorer.", {"path": {"type": "str", "required": True}}, RiskLevel.LOW, open_folder, "windows"))
     registry.register(Tool("win_open_website", "Open a URL in default browser.", {"url": {"type": "str", "required": True}}, RiskLevel.LOW, open_website, "windows"))
+    registry.register(Tool("win_browser_search", "Open browser and search.", {"browser": {"type": "str", "required": True}, "query": {"type": "str", "required": True}, "profile": {"type": "str", "required": False}}, RiskLevel.LOW, win_browser_search, "windows"))
 
     # --- System Information Tools ---
     registry.register(Tool("sys_get_specs", "Get laptop specifications.", {}, RiskLevel.LOW, get_system_information, "system"))
@@ -567,6 +702,13 @@ def register(registry) -> None:
         description="Decrease system volume by 10%.",
         parameters={},
         risk_level=RiskLevel.LOW, func=volume_down, category="windows"))
+
+    # --- YouTube & Media ---
+    registry.register(Tool(
+        name="win_youtube_search",
+        description="Search and play a video directly in the installed YouTube or YouTube Music app.",
+        parameters={"query": {"type": "str", "required": True}, "app": {"type": "str", "required": True}},
+        risk_level=RiskLevel.LOW, func=win_youtube_search, category="windows"))
 
     # --- Power ---
     registry.register(Tool(

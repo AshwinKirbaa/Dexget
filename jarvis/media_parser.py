@@ -16,7 +16,7 @@ class MediaIntentParser:
         cmd = cmd.strip()
         
         # We shouldn't match "play Radhimma on YouTube" here.
-        if re.search(r'\bon\s+youtube\b', cmd, re.IGNORECASE):
+        if re.search(r'\b(on|in)\s+youtube(\s+music)?\b', cmd, re.IGNORECASE):
             return None
             
         # "play Dexter S07E02 from Movies"
@@ -70,6 +70,12 @@ class MediaIntentParser:
         title = title.strip()
         if title.lower() in ("this movie", "the movie", "the file", "the video", ""):
             title = None
+            
+        # Require an explicit local media signal.
+        # If there's no source folder, no drive, and no season/episode pattern, it's not local media.
+        if not source and not drive and not season and not episode:
+            if title and not re.search(r'\b(movie|video|mp4|mkv)\b', title, re.IGNORECASE):
+                return None
             
         return MediaIntent(
             title=title,

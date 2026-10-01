@@ -25,7 +25,7 @@ class ApplicationIntentParser:
             )
             
         # generic open
-        m = re.match(r"^(?:open|launch|start|run|execute)\s+(.+?)(?:\s+in\s+browser)?[\s.!]*$", cmd, re.IGNORECASE)
+        m = re.match(r"^(?:open|launch|start|run|execute)[\s_]+(.+?)(?:\s+in\s+browser)?[\s.!]*$", cmd, re.IGNORECASE)
         if m:
             app = m.group(1).strip()
             # If it has "and type", let the compound workflow handle it, or we can handle it here

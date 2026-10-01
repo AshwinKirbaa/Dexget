@@ -33,14 +33,14 @@ def parse_compound_command(cmd: str) -> ParsedCommand:
         return parsed
 
     # 4. Browser search with profile: "open brave in default and search hotstar"
-    m = re.match(r"^(?:open|launch)\s+([a-zA-Z0-9_\s]+?)\s+(?:in|with)\s+([a-zA-Z0-9_\s]+?)\s+(?:profile\s+)?(?:and\s+)?search\s+(.+)$", cmd, re.IGNORECASE)
+    m = re.match(r"^(?:open|launch)\s+([a-zA-Z0-9_\s]+?)(?:\s+(?:in|with)\s+([a-zA-Z0-9_\s]+?)\s+(?:profile\s+)?)?(?:and\s+)?search\s+(.+)$", cmd, re.IGNORECASE)
     if m:
         parsed.primary_intent = "browser_search"
         parsed.environment = "browser"
         parsed.target_application = m.group(1).strip()
-        parsed.workflow_steps.append(WorkflowStep(action="search", parameters={"profile": m.group(2).strip(), "query": m.group(3).strip()}))
+        profile = m.group(2).strip() if m.group(2) else "default"
+        parsed.workflow_steps.append(WorkflowStep(action="search", parameters={"profile": profile, "query": m.group(3).strip()}))
         return parsed
-
     # Calculator compound: "open calculator and do 2+2"
     m = re.match(r"^(?:open|launch)\s+calculator\s+and\s+do\s+(.+)$", cmd, re.IGNORECASE)
     if m:

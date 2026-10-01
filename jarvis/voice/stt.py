@@ -20,12 +20,14 @@ try:
 except ImportError:
     vosk = None
 
-from faster_whisper import WhisperModel
+from jarvis.config.environment import load_environment
+load_environment()
 
 VOSK_SAMPLE_RATE = 16000
 
 def get_vosk_path():
-    return r"C:\Users\ashwi\.jarvis\vosk-model-small-en-us-0.15"
+    return os.path.expandvars(os.path.expanduser(os.getenv(
+        "JARVIS_VOSK_MODEL") or "~/.jarvis/vosk-model-small-en-us-0.15"))
 
 VOSK_MODEL_PATH = get_vosk_path()
 
@@ -66,7 +68,7 @@ class STTProvider:
             
         # 1. Load Vosk
         if not os.path.exists(VOSK_MODEL_PATH):
-            self.init_error = f"Vosk model not found at {VOSK_MODEL_PATH}.\nPlease download vosk-model-en-us-0.22 and extract it there."
+            self.init_error = f"Vosk model not found at {VOSK_MODEL_PATH}. Set JARVIS_VOSK_MODEL to your extracted model directory."
             print(f"[VOICE ERROR] {self.init_error}")
             return
             
@@ -88,14 +90,13 @@ class STTProvider:
             print(f"[VOICE ERROR] {self.init_error}")
             return
             
-        # 3. Load Whisper
-        try:
-            print("[VOICE] Loading local STT model (faster-whisper base.en)...")
-            self.whisper_model = WhisperModel("base.en", device="cpu", compute_type="int8")
-            print("[VOICE] Whisper: ready")
-        except Exception as e:
-            print(f"[VOICE ERROR] Whisper load failed: {e}")
-            # We can still fallback to Vosk if Whisper fails to load.
+        # Whisper is an optional enhancement, never a requirement for Vosk.
+        if os.getenv("JARVIS_WHISPER_ENABLED", "false").lower() == "true":
+            try:
+                from faster_whisper import WhisperModel
+                self.whisper_model = WhisperModel("base.en", device="cpu", compute_type="int8")
+            except Exception as e:
+                print(f"[VOICE] Optional Whisper unavailable; using Vosk: {e}")
         
         self.is_ready = True
 
@@ -134,7 +135,7 @@ class STTProvider:
         try:
             self.mic_stream = self.pyaudio_instance.open(
                 format=pyaudio.paInt16,
-                channels=default_channels,
+                channels=1,
                 rate=self.capture_rate,
                 input=True,
                 input_device_index=default_idx,
@@ -146,15 +147,18 @@ class STTProvider:
             self.capture_rate = 16000
             self.mic_stream = self.pyaudio_instance.open(
                 format=pyaudio.paInt16,
-                channels=default_channels,
+                channels=1,
                 rate=self.capture_rate,
                 input=True,
                 input_device_index=default_idx,
                 frames_per_buffer=4096
             )
 
-    def listen(self):
+    def listen(self, cancel_event=None):
         """Persistent listen loop. Returns transcribed text when a phrase ends."""
+        if cancel_event is not None and cancel_event.is_set():
+            self.close_microphone()
+            return None
         if not self.is_ready:
             return {"error": "Voice recognition isn't available because the Vosk model could not be loaded."}
             
@@ -174,7 +178,7 @@ class STTProvider:
         except Exception:
             pass
             
-        while True:
+        while cancel_event is None or not cancel_event.is_set():
             try:
                 data = self.mic_stream.read(4096, exception_on_overflow=False)
                 resampled_data = resample_pcm(data, self.capture_rate, VOSK_SAMPLE_RATE)
@@ -228,3 +232,17 @@ class STTProvider:
             except Exception as e:
                 print(f"[VOICE ERROR] Capture loop failed: {e}")
                 return {"error": "I couldn't access the microphone."}
+        self.close_microphone()
+        return None
+
+    def close_microphone(self):
+        if self.mic_stream:
+            try:
+                self.mic_stream.stop_stream()
+                self.mic_stream.close()
+            finally:
+                self.mic_stream = None
+
+    def close(self):
+        self.close_microphone()
+        self.pyaudio_instance.terminate()

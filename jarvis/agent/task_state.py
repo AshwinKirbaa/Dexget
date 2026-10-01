@@ -12,6 +12,7 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     NEEDS_CONFIRMATION = "needs_confirmation"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -47,7 +48,17 @@ class TaskState:
 
     def recent_context(self, n: int = 6) -> str:
         """Short textual summary of the last n observations, for the planner/LLM."""
-        return "\n".join(f"- {o}" for o in self.observations[-n:]) or "(no actions taken yet)"
+        # Bound total history, including large DOM snapshots, so tool specs
+        # and the user's goal remain inside a local model's context window.
+        remaining = 14000
+        selected = []
+        for observation in reversed(self.observations[-n:]):
+            if remaining <= 0:
+                break
+            clipped = observation[:remaining]
+            selected.append(f"- {clipped}")
+            remaining -= len(clipped) + 3
+        return "\n".join(reversed(selected)) or "(no actions taken yet)"
 
     def is_step_limit_reached(self, max_steps: int) -> bool:
         return (len(self.completed_steps) + len(self.failed_steps)) >= max_steps

@@ -1,5 +1,6 @@
 import sys
 import threading
+import queue
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout, 
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                              QFrame, QSizePolicy)
@@ -7,102 +8,126 @@ from PyQt6.QtCore import Qt, QPoint, QThread, pyqtSignal, QTimer, QSize
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QBrush, QPen
 
 import jarvis_integration
-from jarvis.voice.voice_manager import VoiceManager, clean_response
 
 class JarvisWorker(QThread):
     state_changed = pyqtSignal(str, str) # state_name, subtitle
     message_received = pyqtSignal(str, str) # role, text
+    confirmation_requested = pyqtSignal(str)
+    busy_changed = pyqtSignal(bool)
     
-    def __init__(self, agent):
+    def __init__(self, agent=None):
         super().__init__()
         self.agent = agent
         self.vm = None
         self.listening_enabled = False
+        self.commands = queue.Queue()
+        self.shutdown_event = threading.Event()
+        self.busy = threading.Event()
+        self.confirmation_event = threading.Event()
+        self.confirmation_answer = False
+        self.voice_thread = None
+        self.submission_lock = threading.Lock()
+        self.voice_pause = threading.Event()
         
     def run(self):
-        class WidgetVoiceManager(VoiceManager):
-            def __init__(self, agent, worker_ref):
-                super().__init__(agent)
-                self.worker_ref = worker_ref
-
-            def process_voice_command(self, text: str):
-                from jarvis_integration import handle_command
-                from jarvis.voice.wake_word import strip_wake_word
-                
-                # If we are in "Mic On" mode, we might not strictly require a wake word
-                # But let's check if they used it. If not, we just treat the text as direct input
-                # since the mic was explicitly turned on.
-                command = strip_wake_word(text)
-                if command is None:
-                    command = text # If no wake word, just use the transcribed text
-                    
-                if not command.strip():
-                    return
-                    
-                self.worker_ref.message_received.emit("User", command)
-                self.worker_ref.state_changed.emit("Processing", "Thinking...")
-                
-                if command.lower() in ["stop", "cancel", "never mind", "nevermind"]:
-                    self.tts.stop()
-                    self.worker_ref.state_changed.emit("Speaking", "Stopped.")
-                    self.worker_ref.message_received.emit("Jarvis", "Stopped.")
-                    self.tts.speak("Stopped.")
-                    return
-
-                result = handle_command(self.agent, command)
-                
+        while not self.shutdown_event.is_set():
+            try:
+                text = self.commands.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                self.state_changed.emit("Processing", "Planning...")
+                result = jarvis_integration.handle_command(self.agent, text, reset_cancel=False)
                 if result and result.text:
-                    spoken_text = clean_response(result.text)
-                    if spoken_text:
-                        self.worker_ref.message_received.emit("Jarvis", spoken_text)
-                        self.worker_ref.state_changed.emit("Speaking", "Speaking...")
-                        self.tts.speak(spoken_text)
+                    self.message_received.emit("Jarvis", result.text)
+                    if self.vm and not self.agent.registry.cancel_event.is_set():
+                        from jarvis.voice.voice_manager import clean_response
+                        self.vm.tts.speak(clean_response(result.text))
+            except Exception as exc:
+                self.message_received.emit("Jarvis", f"Task failed: {exc}")
+            finally:
+                self.busy.clear()
+                self.busy_changed.emit(False)
+                self.state_changed.emit("Idle", "Ready")
 
-            def run_continuous(self):
-                while True:
-                    if not self.worker_ref.listening_enabled:
-                        import time
-                        time.sleep(0.5)
-                        continue
-                        
-                    try:
-                        self.worker_ref.state_changed.emit("Listening", "Listening...")
-                        res = self.stt.listen()
-                        if not self.worker_ref.listening_enabled:
-                            continue
-                            
-                        if not res:
-                            continue
-                        if "error" in res:
-                            continue
-                            
-                        text = res.get("text", "")
-                        if text:
-                            self.process_voice_command(text)
-                    except Exception as e:
-                        print(f"Voice Exception: {e}")
-                        break
+    def _listen(self):
+        try:
+            from jarvis.voice.voice_manager import VoiceManager
+            from jarvis.voice.wake_word import strip_wake_word
+            self.vm = VoiceManager(self.agent)
+            while not self.shutdown_event.is_set():
+                if not self.listening_enabled:
+                    self.shutdown_event.wait(0.2)
+                    continue
+                result = self.vm.stt.listen(cancel_event=self.voice_pause)
+                if result and result.get("error"):
+                    raise RuntimeError(result["error"])
+                if result and result.get("text") and self.listening_enabled:
+                    text = result["text"]
+                    self.submit_text(strip_wake_word(text) or text)
+        except Exception as exc:
+            self.listening_enabled = False
+            self.message_received.emit("Jarvis", f"Voice unavailable: {exc}. Text input is ready.")
+        finally:
+            if self.vm:
+                self.vm.stt.close()
 
-        self.vm = WidgetVoiceManager(self.agent, self)
-        self.vm.run_continuous()
+    def enable_listening(self, enabled):
+        self.listening_enabled = enabled
+        if enabled:
+            self.voice_pause.clear()
+        else:
+            self.voice_pause.set()
+        if enabled and (self.voice_thread is None or not self.voice_thread.is_alive()):
+            self.voice_thread = threading.Thread(target=self._listen, daemon=True)
+            self.voice_thread.start()
+
+    def confirm(self, prompt):
+        self.confirmation_answer = False
+        self.confirmation_event.clear()
+        self.confirmation_requested.emit(prompt)
+        while not self.confirmation_event.wait(0.1):
+            if self.shutdown_event.is_set() or self.agent.registry.cancel_event.is_set():
+                return False
+        return self.confirmation_answer and not self.agent.registry.cancel_event.is_set()
+
+    def answer_confirmation(self, approved):
+        self.confirmation_answer = approved
+        self.confirmation_event.set()
+
+    def cancel(self):
+        self.agent.cancel()
+        self.answer_confirmation(False)
+        if self.vm:
+            self.vm.tts.stop()
+        # If a command has not started yet, remove it so it cannot clear cancellation.
+        try:
+            self.commands.get_nowait()
+            self.busy.clear()
+            self.busy_changed.emit(False)
+        except queue.Empty:
+            pass
+        self.state_changed.emit("Stopping", "Stopping after the current operation..." if self.busy.is_set() else "Stopped")
+
+    def shutdown(self):
+        self.shutdown_event.set()
+        self.voice_pause.set()
+        self.listening_enabled = False
+        self.cancel()
         
     def submit_text(self, text):
-        def worker_task():
+        if text.lower().strip().rstrip(".!") in ("stop", "cancel", "never mind", "nevermind"):
+            self.cancel()
+            return True
+        with self.submission_lock:
+            if self.busy.is_set() or self.shutdown_event.is_set():
+                return False
+            self.agent.registry.cancel_event.clear()
+            self.busy.set()
+            self.busy_changed.emit(True)
             self.message_received.emit("User", text)
-            self.state_changed.emit("Processing", "Thinking...")
-            
-            from jarvis_integration import handle_command
-            result = handle_command(self.agent, text)
-            
-            if result and result.text:
-                spoken_text = clean_response(result.text)
-                if spoken_text:
-                    self.message_received.emit("Jarvis", spoken_text)
-                    self.state_changed.emit("Speaking", "Speaking...")
-                    self.vm.tts.speak(spoken_text)
-            self.state_changed.emit("Idle", "Ready")
-            
-        threading.Thread(target=worker_task, daemon=True).start()
+            self.commands.put(text)
+            return True
 
 class MessageWidget(QWidget):
     def __init__(self, role, text):
@@ -111,6 +136,7 @@ class MessageWidget(QWidget):
         layout.setContentsMargins(0, 5, 0, 5)
         
         self.label = QLabel(text)
+        self.label.setTextFormat(Qt.TextFormat.PlainText)
         self.label.setWordWrap(True)
         self.label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
@@ -135,19 +161,27 @@ class JarvisWidget(QWidget):
         super().__init__()
         self.initUI()
         
-        # Start Jarvis
-        def on_progress(msg: str):
-            pass 
-            
-        self.agent = jarvis_integration.build_agent(on_progress=on_progress)
-        self.worker = JarvisWorker(self.agent)
+        self.worker = JarvisWorker()
+        self.agent = jarvis_integration.build_agent(
+            on_progress=lambda msg: self.worker.state_changed.emit("Processing", msg),
+            confirm_fn=self.worker.confirm,
+        )
+        self.worker.agent = self.agent
         self.worker.state_changed.connect(self.update_state)
         self.worker.message_received.connect(self.add_message)
+        self.worker.confirmation_requested.connect(self.show_confirmation)
+        self.worker.busy_changed.connect(self.set_busy)
+        self.worker.finished.connect(self.close)
+        self._closing = False
         self.worker.start()
+        if self.agent.registry.unavailable:
+            self.add_message("Jarvis", "Unavailable capabilities: " +
+                             "; ".join(f"{name}: {error}" for name, error in self.agent.registry.unavailable.items()))
 
     def initUI(self):
         # Frameless window and Tool flag so it doesn't show in the taskbar
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool |
+                            Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.resize(400, 400)
         
@@ -176,6 +210,7 @@ class JarvisWidget(QWidget):
         title_layout.setContentsMargins(15, 0, 10, 0)
         
         self.status_label = QLabel("JARVIS Ready")
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.status_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.status_label.setStyleSheet("color: #E0E0E0;")
         
@@ -285,8 +320,15 @@ class JarvisWidget(QWidget):
             }
         """)
         self.send_btn.clicked.connect(self.send_message)
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.setStyleSheet(
+            "QPushButton { color: white; background: #9b3434; border-radius: 5px; padding: 5px 9px; }"
+            "QPushButton:disabled { color: #888; background: #383838; }")
+        self.stop_btn.clicked.connect(lambda: self.worker.cancel())
         
         input_layout.addWidget(self.mic_btn)
+        input_layout.addWidget(self.stop_btn)
         input_layout.addWidget(self.input_field)
         input_layout.addWidget(self.send_btn)
         
@@ -298,7 +340,22 @@ class JarvisWidget(QWidget):
         main_layout.addWidget(self.container)
         self.setLayout(main_layout)
         
-        self.add_message("Jarvis", "Hello! I am ready. You can type to me, or click the 🎤 to speak. I will respond with voice either way.")
+        self.confirmation_panel = QFrame()
+        approval_layout = QVBoxLayout(self.confirmation_panel)
+        self.confirmation_label = QLabel()
+        self.confirmation_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.confirmation_label.setWordWrap(True)
+        self.confirmation_label.setStyleSheet("color: white;")
+        approval_layout.addWidget(self.confirmation_label)
+        approve = QPushButton("Allow action")
+        deny = QPushButton("Cancel task")
+        approve.clicked.connect(lambda: self.resolve_confirmation(True))
+        deny.clicked.connect(lambda: self.resolve_confirmation(False))
+        approval_layout.addWidget(approve)
+        approval_layout.addWidget(deny)
+        container_layout.addWidget(self.confirmation_panel)
+        self.confirmation_panel.hide()
+        self.add_message("Jarvis", "Describe a desktop or browser task. I’ll show progress here. Use Stop to cancel. Enable the microphone for voice input.")
 
     def title_mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -313,20 +370,41 @@ class JarvisWidget(QWidget):
     def toggle_mic(self):
         if self.mic_btn.isChecked():
             self.status_label.setText("Mic ON - Listening")
-            self.worker.listening_enabled = True
+            self.worker.enable_listening(True)
         else:
             self.status_label.setText("Mic OFF")
-            self.worker.listening_enabled = False
+            self.worker.enable_listening(False)
 
     def update_state(self, state, subtitle):
-        if state == "Listening" and self.worker.listening_enabled:
-            self.status_label.setText("Listening...")
-        elif state == "Processing":
-            self.status_label.setText("Thinking...")
-        elif state == "Speaking":
-            self.status_label.setText("Speaking...")
+        self.status_label.setText(subtitle[:70])
+        self.status_label.setToolTip(subtitle)
+        if state in ("Idle", "Stopping"):
+            self.confirmation_panel.hide()
+
+    def set_busy(self, busy):
+        self.send_btn.setEnabled(not busy)
+        self.stop_btn.setEnabled(busy)
+
+    def show_confirmation(self, prompt):
+        if self.agent.registry.cancel_event.is_set():
+            self.worker.answer_confirmation(False)
+            return
+        self.confirmation_label.setText(prompt)
+        self.confirmation_panel.show()
+        self.status_label.setText("Approval needed")
+
+    def resolve_confirmation(self, approved):
+        self.confirmation_panel.hide()
+        self.worker.answer_confirmation(approved)
+
+    def closeEvent(self, event):
+        if self.worker.isRunning():
+            self._closing = True
+            self.worker.shutdown()
+            self.hide()
+            event.ignore()
         else:
-            self.status_label.setText("Ready")
+            event.accept()
 
     def add_message(self, role, text):
         msg_widget = MessageWidget(role, text)
@@ -337,8 +415,8 @@ class JarvisWidget(QWidget):
     def send_message(self):
         text = self.input_field.text().strip()
         if text:
-            self.input_field.clear()
-            self.worker.submit_text(text)
+            if self.worker.submit_text(text):
+                self.input_field.clear()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

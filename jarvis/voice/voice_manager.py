@@ -71,6 +71,7 @@ class VoiceManager:
         
         # Check for interrupt/stop command
         if command.lower() in ["stop", "cancel", "never mind", "nevermind"]:
+            self.agent.cancel()
             self.tts.stop()
             self.tts.speak("Stopped.")
             return

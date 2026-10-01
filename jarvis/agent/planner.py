@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from jarvis.agent.prompts import build_next_action_prompt, build_plan_prompt
 from jarvis.agent.task_state import TaskState
+from jarvis.tools.base import validate_parameters, parameter_json_schema
 
 LLMFn = Callable[[str], Optional[str]]
 
@@ -72,6 +73,8 @@ def parse_next_action(raw: str, tool_specs: List[dict]) -> Dict[str, Any]:
         raise PlanParseError(f"response missing 'action' field: {data!r}")
     
     action = data["action"]
+    if not isinstance(action, str) or not action:
+        raise PlanParseError("'action' must be a nonempty string")
     params = data.get("parameters", {})
     
     if not isinstance(params, dict):
@@ -80,6 +83,9 @@ def parse_next_action(raw: str, tool_specs: List[dict]) -> Dict[str, Any]:
     data.setdefault("parameters", {})
     data.setdefault("thought", "")
     data.setdefault("final_message", "")
+    for key in ("thought", "final_message"):
+        if not isinstance(data[key], str):
+            raise PlanParseError(f"'{key}' must be a string")
     
     # ---------------------------------------------------------
     # Schema validation (Spec requirement 15 & 16)
@@ -95,6 +101,9 @@ def parse_next_action(raw: str, tool_specs: List[dict]) -> Dict[str, Any]:
         
     # Validate required parameters and types
     tool_params = spec.get("parameters", {})
+    error = validate_parameters(tool_params, params)
+    if error:
+        raise PlanParseError(f"tool '{action}': {error}")
     for p_name, p_spec in tool_params.items():
         if p_spec.get("required", False) and p_name not in params:
             raise PlanParseError(f"tool '{action}' is missing required parameter '{p_name}'")
@@ -113,29 +122,45 @@ def next_action(task_state: TaskState, tool_specs: List[dict], llm_fn: LLMFn) ->
     on unparseable output or schema validation failure so the executor
     can retry/recover rather than crashing.
     """
-    prompt = build_next_action_prompt(task_state, tool_specs)
-    raw = llm_fn(prompt) if llm_fn else None
-    if raw is None:
-        raise PlanParseError("LLM unavailable")
-    
-    data = parse_next_action(raw, tool_specs)
-    action = data.get("action")
-    
-    # Environment Validation (e.g. Reject: Notepad + browser_type)
-    spec = next((t for t in tool_specs if t["name"] == action), None)
-    if spec and task_state.tool_history:
-        last_tool = task_state.tool_history[-1]
-        last_spec = next((t for t in tool_specs if t["name"] == last_tool), None)
-        if last_spec:
-            last_cat = last_spec.get("category", "")
-            curr_cat = spec.get("category", "")
-            
-            # If we just opened a windows app, don't immediately use a browser tool
-            if last_cat == "windows" and curr_cat == "browser" and "open_application" in last_tool:
-                raise PlanParseError(f"Context mismatch: cannot use browser tool '{action}' immediately after desktop tool '{last_tool}'")
-                
-            # If we are locked, don't use filesystem tools
-            if "lock" in last_tool and curr_cat == "filesystem":
-                raise PlanParseError(f"Context mismatch: cannot use filesystem tool '{action}' while system is locked")
+    import os
+    original_timeout = os.environ.get("JARVIS_MODEL_TIMEOUT")
+    agent_timeout = int(os.environ.get("JARVIS_AGENT_TIMEOUT", "20"))
+    os.environ["JARVIS_MODEL_TIMEOUT"] = str(agent_timeout)
 
-    return data
+    try:
+        prompt = build_next_action_prompt(task_state, tool_specs)
+        structured = getattr(llm_fn, "structured", None)
+        if callable(structured):
+            raw = structured(prompt, action_json_schema(tool_specs))
+        else:
+            raw = llm_fn(prompt) if llm_fn else None
+        if raw is None:
+            raise PlanParseError("LLM unavailable")
+        
+        data = parse_next_action(raw, tool_specs)
+        return data
+    finally:
+        if original_timeout is not None:
+            os.environ["JARVIS_MODEL_TIMEOUT"] = original_timeout
+        else:
+            del os.environ["JARVIS_MODEL_TIMEOUT"]
+
+def action_json_schema(tool_specs):
+    branches = []
+    specs = list(tool_specs) + [
+        {"name": name, "parameters": {}} for name in
+        ("TASK_COMPLETE", "TASK_FAILED", "USER_CONFIRMATION_REQUIRED")
+    ]
+    for spec in specs:
+        branches.append({
+            "type": "object",
+            "properties": {
+                "action": {"const": spec["name"]},
+                "parameters": parameter_json_schema(spec["parameters"]),
+                "thought": {"type": "string"},
+                "final_message": {"type": "string"},
+            },
+            "required": ["action", "parameters"],
+            "additionalProperties": False,
+        })
+    return {"anyOf": branches}

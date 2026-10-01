@@ -15,6 +15,46 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, Optional
 import time
+import inspect
+
+
+def validate_parameters(schema: Dict[str, dict], values: Dict[str, Any]) -> Optional[str]:
+    types = {"str": str, "int": int, "float": (int, float), "bool": bool,
+             "list": list, "dict": dict}
+    for name, spec in schema.items():
+        if spec.get("required") and name not in values:
+            return f"Missing required parameter '{name}'"
+        if name in values:
+            value = values[name]
+            expected = types.get(spec.get("type", "str"))
+            if value is None and not spec.get("required"):
+                continue
+            if expected and (not isinstance(value, expected) or
+                             (isinstance(value, bool) and spec.get("type") in ("int", "float"))):
+                return f"Parameter '{name}' must have type {spec.get('type', 'str')}"
+    unknown = set(values) - set(schema)
+    if unknown:
+        return f"Unknown parameter(s) {sorted(unknown)}"
+    return None
+
+
+def parameter_json_schema(parameters):
+    """Convert registry metadata to a standard JSON Schema for local decoding."""
+    types = {"str": "string", "int": "integer", "float": "number",
+             "bool": "boolean", "list": "array", "dict": "object"}
+    properties = {}
+    for name, metadata in parameters.items():
+        entry = {"type": types.get(metadata.get("type", "str"), "string")}
+        if "default" in metadata:
+            entry["default"] = metadata["default"]
+            if metadata["default"] is None:
+                entry["type"] = [entry["type"], "null"]
+        if metadata.get("description"):
+            entry["description"] = metadata["description"]
+        properties[name] = entry
+    return {"type": "object", "properties": properties,
+            "required": [k for k, v in parameters.items() if v.get("required")],
+            "additionalProperties": False}
 
 
 class RiskLevel(str, Enum):
@@ -62,13 +102,7 @@ class Tool:
 
     def validate(self, kwargs: Dict[str, Any]) -> Optional[str]:
         """Return an error string if kwargs don't satisfy the schema, else None."""
-        for pname, spec in self.parameters.items():
-            if spec.get("required") and pname not in kwargs:
-                return f"Missing required parameter '{pname}' for tool '{self.name}'"
-        unknown = set(kwargs) - set(self.parameters)
-        if unknown:
-            return f"Unknown parameter(s) {sorted(unknown)} for tool '{self.name}'"
-        return None
+        return validate_parameters(self.parameters, kwargs)
 
     def execute(self, **kwargs) -> ToolResult:
         error = self.validate(kwargs)
@@ -91,12 +125,20 @@ class Tool:
 
     def spec(self) -> Dict[str, Any]:
         """Compact description handed to the LLM for tool selection."""
+        defaults = {}
+        try:
+            defaults = {name: parameter.default for name, parameter in
+                        inspect.signature(self.func).parameters.items()
+                        if parameter.default is not inspect.Parameter.empty}
+        except (TypeError, ValueError):
+            pass
         return {
             "name": self.name,
             "description": self.description,
             "parameters": {
                 k: {"type": v.get("type", "str"), "required": v.get("required", False),
-                    "description": v.get("description", "")}
+                    "description": v.get("description", ""),
+                    **({"default": defaults[k]} if k in defaults else {})}
                 for k, v in self.parameters.items()
             },
             "risk_level": self.risk_level.value,

@@ -17,12 +17,17 @@ def get_known_folders():
         "videos": os.path.join(home, "Videos"),
     }
 
-def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any], on_progress) -> Dict[str, Any]:
+def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any], on_progress, registry=None) -> Dict[str, Any]:
     """Execute a parsed filesystem command deterministically."""
     intent = route_args.get("intent")
     target_name = route_args.get("target_name")
     location = route_args.get("location")
     location_type = route_args.get("location_type")
+    if registry is None:
+        from jarvis.agent.tool_registry import ToolRegistry
+        from jarvis.tools.filesystem import register
+        registry = ToolRegistry()
+        register(registry)
     
     if on_progress:
         on_progress(f"[PARSE] action={route_args.get('action')}, target={target_name}, location={location or 'UNSPECIFIED'}")
@@ -41,11 +46,13 @@ def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any]
         else:
             return {"success": False, "observation": f"Drive {location} not found."}
             
-    def _resolve_location(loc: str, loc_type: str) -> str:
+    def _resolve_location(loc: str, loc_type: str) -> Optional[str]:
         if not loc:
             return context.get("current_directory") or os.path.join(os.path.expanduser("~"), "Desktop")
         if loc_type == "DRIVE" or os.path.isabs(loc) or loc.endswith(':\\'):
-            return loc
+            if os.path.exists(loc):
+                return loc
+            return None
             
         known = get_known_folders()
         if loc.lower() in known:
@@ -78,8 +85,8 @@ def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any]
             except Exception:
                 pass
                 
-        # Fallback to Desktop if not found
-        return os.path.join(os.path.expanduser("~"), "Desktop")
+        # If explicitly requested but not found, DO NOT fallback.
+        return None
             
     if intent == "FILESYSTEM_OPEN":
         # Strategy:
@@ -156,6 +163,8 @@ def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any]
 
     if intent == "FILESYSTEM_SEARCH":
         loc = _resolve_location(location, location_type)
+        if not loc:
+            return {"success": False, "observation": f"I couldn't find the folder '{location}' to search in."}
         if on_progress:
             on_progress(f"[SEARCH] Searching {loc} for {target_name}")
             
@@ -188,12 +197,14 @@ def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any]
 
     if intent == "FILESYSTEM_CREATE":
         loc = _resolve_location(location, location_type)
+        if not loc:
+            return {"success": False, "observation": f"I couldn't find the folder '{location}' to create {target_name} inside."}
         path = os.path.join(loc, target_name)
         try:
-            if route_args.get("target_type") == "FILE":
-                open(path, 'a').close()
-            else:
-                os.makedirs(path, exist_ok=True)
+            tool = "fs_create_file" if route_args.get("target_type") == "FILE" else "fs_create_directory"
+            result = registry.execute(tool, path=path)
+            if not result.success:
+                return result.to_dict()
             if on_progress:
                 on_progress(f"[ACT] Created {path}")
             context["current_directory"] = loc
@@ -203,6 +214,8 @@ def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any]
 
     if intent == "FILESYSTEM_DELETE":
         loc = _resolve_location(location, location_type)
+        if not loc:
+            return {"success": False, "observation": f"I couldn't find the folder '{location}' containing the item to delete."}
         
         if os.path.basename(loc).lower() == target_name.lower():
             target_path = loc
@@ -211,11 +224,9 @@ def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any]
         
         if os.path.exists(target_path):
             try:
-                import shutil
-                if os.path.isdir(target_path):
-                    shutil.rmtree(target_path)
-                else:
-                    os.remove(target_path)
+                result = registry.execute("fs_delete_file", path=target_path)
+                if not result.success:
+                    return result.to_dict()
                 if on_progress:
                     on_progress(f"[ACT] Deleted {target_path}")
                 # Reset context if we just deleted the current directory
@@ -229,6 +240,8 @@ def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any]
 
     if intent == "FILESYSTEM_LIST":
         loc = _resolve_location(location, location_type)
+        if not loc:
+            return {"success": False, "observation": f"I couldn't find the folder '{location}' to list its contents."}
         if on_progress:
             on_progress(f"[ACT] Listing {loc}")
         try:

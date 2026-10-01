@@ -12,14 +12,54 @@ DB_PATH = os.path.expanduser("~/.jarvis/memory.db")
 def _get_conn():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(
+    
+    tables = [
         """
         CREATE TABLE IF NOT EXISTS preferences (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         )
+        """,
         """
-    )
+        CREATE TABLE IF NOT EXISTS accounts_metadata (
+            account_id TEXT PRIMARY KEY,
+            metadata TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS task_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT,
+            intent TEXT,
+            status TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS successful_strategies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            intent TEXT,
+            strategy_json TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS failures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT,
+            error TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS automation_preferences (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    ]
+    for table_sql in tables:
+        conn.execute(table_sql)
+        
     conn.commit()
     return conn
 

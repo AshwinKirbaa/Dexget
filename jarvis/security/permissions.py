@@ -52,13 +52,17 @@ def sanitize_path(path: Optional[str], allowed_roots: Optional[Iterable[str]] = 
     if path is None:
         return None
 
-    real = os.path.realpath(os.path.abspath(path))
+    real = os.path.realpath(os.path.abspath(os.path.expandvars(os.path.expanduser(path))))
 
     if allowed_roots:
         allowed = False
         for root in allowed_roots:
-            root_real = os.path.realpath(os.path.abspath(root))
-            if real == root_real or real.startswith(root_real + os.sep):
+            root_real = os.path.normcase(os.path.realpath(os.path.abspath(root)))
+            try:
+                within_root = os.path.commonpath([os.path.normcase(real), root_real]) == root_real
+            except ValueError:
+                within_root = False
+            if within_root:
                 allowed = True
                 break
         if not allowed:

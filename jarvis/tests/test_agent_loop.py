@@ -154,6 +154,7 @@ class AgentFastPathTests(unittest.TestCase):
         registry = build_default_registry(confirm_fn=always_allow_confirm_fn())
         llm = ScriptedLLM([
             "plan",
+            json.dumps({"action": "sys_get_time", "parameters": {}}),
             json.dumps({"action": "TASK_COMPLETE", "final_message": "handled by agent loop"}),
         ])
         agent = Agent(registry, llm_fn=llm, fast_path_fn=lambda cmd: None)
