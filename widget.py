@@ -46,18 +46,23 @@ class BatteryIndicator(QWidget):
 class EarbudsIndicator(QWidget):
     def __init__(self):
         super().__init__()
-        self.setFixedSize(48, 38)
+        self.setFixedSize(46, 40)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#f5f7fa"), 4, Qt.PenStyle.SolidLine,
-                            Qt.PenCapStyle.RoundCap))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(QRectF(5, 3, 13, 13))
-        painter.drawLine(14, 14, 16, 31)
-        painter.drawEllipse(QRectF(27, 3, 13, 13))
-        painter.drawLine(31, 14, 29, 31)
+        white = QColor("#f7f8fa")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(white)
+        # Two compact AirPods-style silhouettes. The asymmetry of each stem
+        # keeps the glyph recognizable at Dynamic Island scale.
+        painter.drawEllipse(QRectF(4, 3, 16, 17))
+        painter.drawRoundedRect(QRectF(12, 14, 6, 22), 3, 3)
+        painter.drawEllipse(QRectF(26, 3, 16, 17))
+        painter.drawRoundedRect(QRectF(28, 14, 6, 22), 3, 3)
+        painter.setBrush(QColor("#101216"))
+        painter.drawEllipse(QRectF(7, 8, 4, 5))
+        painter.drawEllipse(QRectF(35, 8, 4, 5))
 
 
 class ConnectionRing(QWidget):
@@ -68,9 +73,15 @@ class ConnectionRing(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#30d158"), 4))
+        painter.setPen(QPen(QColor(48, 209, 88, 45), 4))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(QRectF(4, 4, 30, 30))
+        painter.setPen(QPen(QColor("#30d158"), 4, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap))
+        painter.drawArc(QRectF(4, 4, 30, 30), 38 * 16, 286 * 16)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#30d158"))
+        painter.drawEllipse(QRectF(29.3, 27.0, 4.5, 4.5))
 
 class JarvisWorker(QThread):
     state_changed = pyqtSignal(str, str) # state_name, subtitle
@@ -308,7 +319,7 @@ class JarvisWidget(QWidget):
     COLLAPSED_SIZE = QSize(300, 48)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
-    HEADSET_SIZE = QSize(390, 60)
+    HEADSET_SIZE = QSize(350, 56)
     MEDIA_MIN_WIDTH = 400
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
@@ -467,6 +478,7 @@ class JarvisWidget(QWidget):
         self.headset_name = QLabel("Headset")
         self.headset_name.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
         self.headset_name.setStyleSheet("color: white;")
+        self.headset_name.setMaximumWidth(190)
         self.headset_status = QLabel("Connected")
         self.headset_status.setFont(QFont("Segoe UI", 9))
         self.headset_status.setStyleSheet("color: #9da7b3;")
@@ -516,11 +528,11 @@ class JarvisWidget(QWidget):
         # collapses this layout to zero because its labels use Ignored sizing.
         title_layout.addWidget(self.identity_widget, 1)
         title_layout.addWidget(self.charging_label)
+        title_layout.addWidget(self.earbuds_indicator)
+        title_layout.addWidget(self.headset_identity)
         title_layout.addStretch()
         title_layout.addWidget(self.charging_percent)
         title_layout.addWidget(self.battery_indicator)
-        title_layout.addWidget(self.earbuds_indicator)
-        title_layout.addWidget(self.headset_identity)
         title_layout.addWidget(self.connection_ring)
         title_layout.addWidget(self.previous_btn)
         title_layout.addWidget(self.play_pause_btn)
