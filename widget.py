@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
 from PyQt6.QtCore import (Qt, QPoint, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QSequentialAnimationGroup, QParallelAnimationGroup,
-                          QRectF)
+                          QRectF, QAbstractAnimation)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap)
 
@@ -338,6 +338,10 @@ class JarvisWidget(QWidget):
         super().__init__()
         self.is_expanded = False
         self._animation = None
+        self._animation_target = None
+        self._visibility_generation = 0
+        self._is_hiding = False
+        self._hot_zone_armed = True
         self._content_animation = None
         self._media = {}
         self._media_manually_hidden = False
@@ -792,14 +796,41 @@ class JarvisWidget(QWidget):
         self.setGeometry(self._target_geometry(size))
 
     def _animate_to(self, size, duration=320, curve=QEasingCurve.Type.OutQuint):
+        target = self._target_geometry(size)
+        if (self._animation and self._animation_target == target
+                and self._animation.state() == QAbstractAnimation.State.Running):
+            return
+        if self.geometry() == target:
+            self._animation_target = target
+            return
         if self._animation:
             self._animation.stop()
         self._animation = QPropertyAnimation(self, b"geometry", self)
+        self._animation_target = target
         self._animation.setDuration(duration)
         self._animation.setEasingCurve(curve)
         self._animation.setStartValue(self.geometry())
-        self._animation.setEndValue(self._target_geometry(size))
+        self._animation.setEndValue(target)
         self._animation.start()
+
+    def _present_compact(self, size, duration=330):
+        """Reveal at a deterministic geometry, then perform one fluid resize."""
+        self._visibility_generation += 1
+        self._is_hiding = False
+        was_hidden = self.isHidden() or self._auto_hidden or self.windowOpacity() < 0.1
+        if self._animation:
+            self._animation.stop()
+        self._animation_target = None
+        self.setWindowOpacity(1.0)
+        if was_hidden:
+            start = QSize(max(120, int(size.width() * 0.68)),
+                          max(34, size.height() - 8))
+            # Set the first painted geometry before show(), avoiding a frame at
+            # the previous/default size followed by a second corrective resize.
+            self.setGeometry(self._target_geometry(start))
+        self.show()
+        self.raise_()
+        self._animate_to(size, duration, QEasingCurve.Type.OutCubic)
 
     def _animate_media_bump(self):
         """A subtle live-activity breathe when the playing item changes."""
@@ -905,6 +936,10 @@ class JarvisWidget(QWidget):
     def hide_media_island(self):
         """Hide the UI without stopping either background worker."""
         self._media_manually_hidden = True
+        self._is_hiding = True
+        # Require the pointer to leave and re-enter the hot zone. Otherwise a
+        # minimize click near the top center can instantly reopen the island.
+        self._hot_zone_armed = False
         self.is_expanded = False
         self._auto_hidden = True
         self._hover_leave_at = None
@@ -912,24 +947,36 @@ class JarvisWidget(QWidget):
         self.input_frame.hide()
         if self._animation:
             self._animation.stop()
+        self._animation_target = None
+        self._visibility_generation += 1
+        generation = self._visibility_generation
         self.setWindowOpacity(1.0)
-        # Morph toward the top edge and fade away, then hide the native window.
-        geometry = QPropertyAnimation(self, b"geometry")
-        geometry.setDuration(230)
+        # Morph toward the top edge, then hide once. Animating native window
+        # opacity in parallel with geometry makes Windows recompose the layered
+        # surface twice per frame and causes flashes on some GPUs.
+        geometry = QPropertyAnimation(self, b"geometry", self)
+        geometry.setDuration(220)
         geometry.setEasingCurve(QEasingCurve.Type.InBack)
         geometry.setStartValue(self.geometry())
         geometry.setEndValue(self._target_geometry(self.HIDDEN_SIZE))
-        opacity = QPropertyAnimation(self, b"windowOpacity")
-        opacity.setDuration(190)
-        opacity.setStartValue(1.0)
-        opacity.setEndValue(0.0)
-        group = QParallelAnimationGroup(self)
-        group.addAnimation(geometry)
-        group.addAnimation(opacity)
-        group.finished.connect(self.hide)
-        self._animation = group
-        group.start()
-        QTimer.singleShot(240, self.hide)
+        geometry.finished.connect(self._complete_media_hide)
+        self._animation = geometry
+        self._animation_target = self._target_geometry(self.HIDDEN_SIZE)
+        geometry.start()
+        # A guarded fallback covers animation-driver interruption (display
+        # sleep, shell restart, or Qt event-loop replacement) without allowing
+        # an old timer to hide a newer, already-visible activity.
+        QTimer.singleShot(
+            260,
+            lambda: self._complete_media_hide()
+            if (generation == self._visibility_generation and self._auto_hidden)
+            else None,
+        )
+
+    def _complete_media_hide(self):
+        self._is_hiding = False
+        if self._auto_hidden:
+            self.hide()
 
     def reveal_idle_island(self):
         if not self._auto_hidden:
@@ -937,13 +984,10 @@ class JarvisWidget(QWidget):
         self._auto_hidden = False
         self._media_manually_hidden = False
         self._hover_leave_at = None
-        self.setWindowOpacity(1.0)
-        self.show()
-        self.raise_()
-        self._animate_to(self._compact_size())
+        self._present_compact(self._compact_size())
 
     def _check_hot_zone(self):
-        if (self.is_expanded or self.worker.busy.is_set()
+        if (self._is_hiding or self.is_expanded or self.worker.busy.is_set()
                 or (self._media and self._media.get("playing")
                     and not self._media_manually_hidden)):
             return
@@ -955,7 +999,10 @@ class JarvisWidget(QWidget):
             center - self.HOT_ZONE_WIDTH // 2 <= cursor.x() <= center + self.HOT_ZONE_WIDTH // 2
             and area.y() <= cursor.y() <= area.y() + self.HOT_ZONE_HEIGHT
         )
-        if self._auto_hidden and in_hot_zone:
+        if not in_hot_zone:
+            self._hot_zone_armed = True
+        if self._auto_hidden and in_hot_zone and self._hot_zone_armed:
+            self._hot_zone_armed = False
             self.reveal_idle_island()
         elif not self._auto_hidden:
             if in_hot_zone or self.geometry().contains(cursor):
@@ -976,38 +1023,26 @@ class JarvisWidget(QWidget):
             self.expand_island(True)
 
     def activate_island(self):
-        was_hidden = self.isHidden() or self.isMinimized()
         if self.isMinimized():
             self.showNormal()
-        self.show()
-        self.raise_()
-        self.activateWindow()
         self._collapse_timer.stop()
         self._auto_hidden = False
         self._media_manually_hidden = False
-        self.setWindowOpacity(1.0)
         self.is_expanded = False
         self.scroll_area.hide()
         self.input_frame.hide()
-        if was_hidden:
-            self.setGeometry(self._target_geometry(QSize(150, 34)))
-        self._animate_to(self._compact_size(), 390, QEasingCurve.Type.OutBack)
+        self._present_compact(self._compact_size(), 340)
+        self.activateWindow()
 
     def activate_media_island(self):
         """Show the compact live activity when playback becomes active."""
-        was_hidden = self.isHidden() or self._auto_hidden
         self._collapse_timer.stop()
         self._auto_hidden = False
         self._media_manually_hidden = False
         self.is_expanded = False
         self.scroll_area.hide()
         self.input_frame.hide()
-        self.setWindowOpacity(1.0)
-        self.show()
-        self.raise_()
-        if was_hidden:
-            self.setGeometry(self._target_geometry(QSize(150, 34)))
-        self._animate_to(self._compact_size(), 390, QEasingCurve.Type.OutBack)
+        self._present_compact(self._compact_size(), 340)
 
     def _pulse_media_indicator(self):
         if not self._media or not self._media.get("playing"):
@@ -1177,10 +1212,7 @@ class JarvisWidget(QWidget):
         self.charging_percent.show()
         self.battery_indicator.show()
         self._update_charging_percent(percent)
-        self.setWindowOpacity(1.0)
-        self.show()
-        self.raise_()
-        self._animate_to(self.CHARGING_SIZE, 390, QEasingCurve.Type.OutBack)
+        self._present_compact(self.CHARGING_SIZE, 340)
         self._charging_hide_timer.start(4200)
 
     def finish_charging_activity(self, restore=True):
@@ -1234,10 +1266,7 @@ class JarvisWidget(QWidget):
                 display_name = display_name[len(prefix):-1]
                 break
         self.headset_name.setText(display_name[:34] or "Headset")
-        self.setWindowOpacity(1.0)
-        self.show()
-        self.raise_()
-        self._animate_to(self.HEADSET_SIZE, 390, QEasingCurve.Type.OutBack)
+        self._present_compact(self.HEADSET_SIZE, 340)
         self._headset_hide_timer.start(4200)
 
     def finish_headset_activity(self, restore=True):
@@ -1291,10 +1320,7 @@ class JarvisWidget(QWidget):
         self.low_power_percent.show()
         self.low_power_battery.show()
         self._update_low_power_percent(percent)
-        self.setWindowOpacity(1.0)
-        self.show()
-        self.raise_()
-        self._animate_to(self.LOW_POWER_SIZE, 390, QEasingCurve.Type.OutBack)
+        self._present_compact(self.LOW_POWER_SIZE, 340)
         self._low_power_hide_timer.start(4200)
 
     def finish_low_power_activity(self, restore=True):
@@ -1347,10 +1373,7 @@ class JarvisWidget(QWidget):
         self.notification_body.setText(subtitle[:78])
         self.notification_icon.show()
         self.notification_identity.show()
-        self.setWindowOpacity(1.0)
-        self.show()
-        self.raise_()
-        self._animate_to(self.NOTIFICATION_SIZE, 390, QEasingCurve.Type.OutBack)
+        self._present_compact(self.NOTIFICATION_SIZE, 340)
         self._notification_hide_timer.start(5200)
 
     def finish_notification_activity(self, restore=True):
@@ -1464,7 +1487,9 @@ class JarvisWidget(QWidget):
                 self._collapse_timer.start(1800)
         if playing_now and not was_playing:
             self.activate_media_island()
-        elif not playing_now and (was_playing or self._media):
+        elif (not playing_now and
+              (was_playing or (self._media and not self._auto_hidden
+                               and not self._media_manually_hidden))):
             self.hide_media_island()
         elif not self.is_expanded and not self._media_manually_hidden:
             if self._media and previous_key and previous_key != self._last_media_key:

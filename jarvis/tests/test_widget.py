@@ -397,3 +397,23 @@ def test_notification_live_activity_shows_content_and_restores_state():
         assert widget.worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_duplicate_resize_requests_do_not_restart_running_animation():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget._animate_to(widget.COLLAPSED_SIZE, 1000)
+        animation = widget._animation
+        widget._animate_to(widget.COLLAPSED_SIZE, 1000)
+        assert widget._animation is animation
+        assert widget._animation.state() == widget._animation.State.Running
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
