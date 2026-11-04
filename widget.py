@@ -22,10 +22,15 @@ class BatteryIndicator(QWidget):
     def __init__(self):
         super().__init__()
         self.percent = 0
+        self.low_power = False
         self.setFixedSize(42, 24)
 
     def set_percent(self, percent):
         self.percent = max(0, min(100, int(percent)))
+        self.update()
+
+    def set_low_power(self, enabled):
+        self.low_power = bool(enabled)
         self.update()
 
     def paintEvent(self, event):
@@ -39,7 +44,7 @@ class BatteryIndicator(QWidget):
         painter.setBrush(QColor("#8b929a"))
         painter.drawRoundedRect(QRectF(37.5, 8.0, 3.5, 8.0), 1.5, 1.5)
         fill_width = 30.0 * self.percent / 100.0
-        painter.setBrush(QColor("#32d74b"))
+        painter.setBrush(QColor("#ff453a") if self.low_power else QColor("#32d74b"))
         painter.drawRoundedRect(QRectF(4.0, 5.0, fill_width, 14.0), 3.5, 3.5)
 
 
@@ -319,6 +324,7 @@ class JarvisWidget(QWidget):
     COLLAPSED_SIZE = QSize(300, 48)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
+    LOW_POWER_SIZE = QSize(350, 56)
     HEADSET_SIZE = QSize(350, 56)
     MEDIA_MIN_WIDTH = 400
     MEDIA_BASE_WIDTH = 300
@@ -343,6 +349,8 @@ class JarvisWidget(QWidget):
         self._charging_active = False
         self._pre_charging_expanded = False
         self._last_power_plugged = None
+        self._low_power_active = False
+        self._last_energy_saver = None
         self._headset_active = False
         self._last_audio_device_id = None
         self._collapse_timer = QTimer(self)
@@ -363,6 +371,9 @@ class JarvisWidget(QWidget):
         self._battery_timer.setInterval(1500)
         self._battery_timer.timeout.connect(self._check_battery_state)
         self._battery_timer.start()
+        self._low_power_hide_timer = QTimer(self)
+        self._low_power_hide_timer.setSingleShot(True)
+        self._low_power_hide_timer.timeout.connect(self.finish_low_power_activity)
         self._headset_hide_timer = QTimer(self)
         self._headset_hide_timer.setSingleShot(True)
         self._headset_hide_timer.timeout.connect(self.finish_headset_activity)
@@ -470,6 +481,18 @@ class JarvisWidget(QWidget):
         self.charging_percent.hide()
         self.battery_indicator.hide()
 
+        self.low_power_label = QLabel("Low Battery")
+        self.low_power_label.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
+        self.low_power_label.setStyleSheet("color: white;")
+        self.low_power_percent = QLabel("0%")
+        self.low_power_percent.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
+        self.low_power_percent.setStyleSheet("color: #ff6961;")
+        self.low_power_battery = BatteryIndicator()
+        self.low_power_battery.set_low_power(True)
+        self.low_power_label.hide()
+        self.low_power_percent.hide()
+        self.low_power_battery.hide()
+
         self.earbuds_indicator = EarbudsIndicator()
         self.headset_identity = QWidget()
         headset_identity_layout = QVBoxLayout(self.headset_identity)
@@ -528,11 +551,14 @@ class JarvisWidget(QWidget):
         # collapses this layout to zero because its labels use Ignored sizing.
         title_layout.addWidget(self.identity_widget, 1)
         title_layout.addWidget(self.charging_label)
+        title_layout.addWidget(self.low_power_label)
         title_layout.addWidget(self.earbuds_indicator)
         title_layout.addWidget(self.headset_identity)
         title_layout.addStretch()
         title_layout.addWidget(self.charging_percent)
         title_layout.addWidget(self.battery_indicator)
+        title_layout.addWidget(self.low_power_percent)
+        title_layout.addWidget(self.low_power_battery)
         title_layout.addWidget(self.connection_ring)
         title_layout.addWidget(self.previous_btn)
         title_layout.addWidget(self.play_pause_btn)
@@ -700,6 +726,8 @@ class JarvisWidget(QWidget):
     def _compact_size(self):
         if self._headset_active:
             return self.HEADSET_SIZE
+        if self._low_power_active:
+            return self.LOW_POWER_SIZE
         if self._charging_active:
             return self.CHARGING_SIZE
         if not self._media:
@@ -965,6 +993,35 @@ class JarvisWidget(QWidget):
         elif self._charging_active and plugged:
             self._update_charging_percent(battery.percent)
         self._last_power_plugged = plugged
+        saver = self._energy_saver_enabled()
+        if self._last_energy_saver is False and saver:
+            self.show_low_power_activity(battery.percent)
+        elif self._low_power_active and saver:
+            self._update_low_power_percent(battery.percent)
+        self._last_energy_saver = saver
+
+    @staticmethod
+    def _energy_saver_enabled():
+        """Return the Windows Energy Saver flag from GetSystemPowerStatus."""
+        try:
+            import ctypes
+
+            class SystemPowerStatus(ctypes.Structure):
+                _fields_ = [
+                    ("ACLineStatus", ctypes.c_byte),
+                    ("BatteryFlag", ctypes.c_byte),
+                    ("BatteryLifePercent", ctypes.c_byte),
+                    ("SystemStatusFlag", ctypes.c_byte),
+                    ("BatteryLifeTime", ctypes.c_ulong),
+                    ("BatteryFullLifeTime", ctypes.c_ulong),
+                ]
+
+            status = SystemPowerStatus()
+            if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
+                return False
+            return bool(status.SystemStatusFlag)
+        except Exception:
+            return False
 
     @staticmethod
     def _is_headset_name(name):
@@ -993,6 +1050,8 @@ class JarvisWidget(QWidget):
         self.battery_indicator.set_percent(value)
 
     def show_charging_activity(self, percent):
+        if self._low_power_active:
+            self.finish_low_power_activity(restore=False)
         if self._headset_active:
             self.finish_headset_activity(restore=False)
         self._pre_charging_expanded = self.is_expanded
@@ -1040,6 +1099,8 @@ class JarvisWidget(QWidget):
             self.hide_media_island()
 
     def show_headset_activity(self, name):
+        if self._low_power_active:
+            self.finish_low_power_activity(restore=False)
         if self._charging_active:
             self._charging_hide_timer.stop()
             self.finish_charging_activity(restore=False)
@@ -1078,6 +1139,61 @@ class JarvisWidget(QWidget):
         self.earbuds_indicator.hide()
         self.headset_identity.hide()
         self.connection_ring.hide()
+        self.status_dot.show()
+        self.identity_widget.show()
+        self.close_btn.show()
+        if self._media:
+            self._set_media_controls_visible(True)
+        if not restore:
+            return
+        if self._pre_charging_expanded:
+            self.expand_island()
+        elif self._media and self._media.get("playing"):
+            self.activate_media_island()
+        else:
+            self.hide_media_island()
+
+    def _update_low_power_percent(self, percent):
+        value = max(0, min(100, int(round(percent))))
+        self.low_power_percent.setText(f"{value}%")
+        self.low_power_battery.set_percent(value)
+
+    def show_low_power_activity(self, percent):
+        if self._charging_active:
+            self._charging_hide_timer.stop()
+            self.finish_charging_activity(restore=False)
+        if self._headset_active:
+            self._headset_hide_timer.stop()
+            self.finish_headset_activity(restore=False)
+        self._pre_charging_expanded = self.is_expanded
+        self._low_power_active = True
+        self._collapse_timer.stop()
+        self._auto_hidden = False
+        self.is_expanded = False
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.status_dot.hide()
+        self.album_art.hide()
+        self.identity_widget.hide()
+        self._set_media_controls_visible(False)
+        self.close_btn.hide()
+        self.low_power_label.show()
+        self.low_power_percent.show()
+        self.low_power_battery.show()
+        self._update_low_power_percent(percent)
+        self.setWindowOpacity(1.0)
+        self.show()
+        self.raise_()
+        self._animate_to(self.LOW_POWER_SIZE, 390, QEasingCurve.Type.OutBack)
+        self._low_power_hide_timer.start(4200)
+
+    def finish_low_power_activity(self, restore=True):
+        if not self._low_power_active:
+            return
+        self._low_power_active = False
+        self.low_power_label.hide()
+        self.low_power_percent.hide()
+        self.low_power_battery.hide()
         self.status_dot.show()
         self.identity_widget.show()
         self.close_btn.show()

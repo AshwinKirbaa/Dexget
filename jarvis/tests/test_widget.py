@@ -336,3 +336,34 @@ def test_headset_connection_shows_live_activity_and_restores_state():
         assert widget.worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_energy_saver_shows_low_power_activity_and_restores_state():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.show_low_power_activity(30)
+        assert widget._low_power_active
+        assert widget._compact_size() == widget.LOW_POWER_SIZE
+        assert widget.low_power_label.text() == "Low Battery"
+        assert widget.low_power_percent.text() == "30%"
+        assert widget.low_power_battery.low_power
+        assert not widget.low_power_battery.isHidden()
+        assert widget.identity_widget.isHidden()
+
+        widget.finish_low_power_activity()
+        assert not widget._low_power_active
+        assert widget.low_power_label.isHidden()
+        assert widget.low_power_battery.isHidden()
+        assert not widget.identity_widget.isHidden()
+        assert widget.worker.isRunning()
+        assert widget.media_worker.isRunning()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
