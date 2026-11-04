@@ -211,6 +211,33 @@ def test_expand_defers_content_until_surface_has_grown():
         app.processEvents()
 
 
+def test_media_expand_preserves_content_aware_width():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.update_media({
+            "title": "A deliberately long media title for sizing",
+            "artist": "A deliberately long artist name",
+            "app": "YouTube Music", "playing": True,
+        })
+        compact_width = widget._compact_size().width()
+        widget.resize(widget._compact_size())
+        widget.expand_island()
+        target = widget._animation.endValue()
+        assert target.width() == compact_width
+        assert target.width() >= widget.EXPANDED_SIZE.width()
+        assert target.height() == widget.EXPANDED_SIZE.height()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_hover_revealed_paused_media_minimizes_after_pointer_leaves():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:

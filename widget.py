@@ -584,8 +584,14 @@ class JarvisWidget(QWidget):
                     min(self.MEDIA_SIZE.width(), self.MEDIA_BASE_WIDTH + text_width))
         return QSize(width, self.MEDIA_SIZE.height())
 
+    def _expanded_size(self):
+        """Preserve the content-aware media width while opening the panel."""
+        compact_width = self._compact_size().width()
+        return QSize(max(self.EXPANDED_SIZE.width(), compact_width),
+                     self.EXPANDED_SIZE.height())
+
     def _place_top_center(self):
-        size = self.EXPANDED_SIZE if self.is_expanded else self._compact_size()
+        size = self._expanded_size() if self.is_expanded else self._compact_size()
         self.setGeometry(self._target_geometry(size))
 
     def _animate_to(self, size, duration=320, curve=QEasingCurve.Type.OutQuint):
@@ -661,7 +667,9 @@ class JarvisWidget(QWidget):
         if not self.confirmation_panel.isHidden() or self.confirmation_label.text():
             self.confirmation_panel.setVisible(not self.confirmation_panel.isHidden())
         self.expand_btn.setText("⌃")
-        self._animate_to(self.EXPANDED_SIZE, 400, QEasingCurve.Type.OutQuint)
+        # Expand directly from the already content-sized media pill. Using a
+        # fixed width here caused a second horizontal resize and visible flash.
+        self._animate_to(self._expanded_size(), 400, QEasingCurve.Type.OutQuint)
         # Let the black island surface establish first; adding the complex
         # scroll/input layout at the same instant as the native resize causes
         # a one-frame flash on DWM layered windows.
