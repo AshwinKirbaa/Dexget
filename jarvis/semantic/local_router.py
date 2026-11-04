@@ -3,7 +3,7 @@ from typing import Optional, Tuple
 from jarvis.router import RouteResult, RouteType, ToolCall, _browser, _windows, _fast, _search, _fast_multi
 from jarvis.semantic.classifier import classify_intent, Intent
 
-def route_natural_language(command: str, llm_fn) -> Optional[RouteResult]:
+def route_natural_language(command: str, llm_fn=None) -> Optional[RouteResult]:
     """
     Fast, local natural language semantic router.
     Calls Tier 1 local model via classify_intent to produce a structured JSON intent.
@@ -11,7 +11,7 @@ def route_natural_language(command: str, llm_fn) -> Optional[RouteResult]:
     """
     structured = classify_intent(command, llm_fn)
     
-    if structured.intent == Intent.YOUTUBE_PLAY:
+    if structured.intent in (Intent.YOUTUBE_PLAY, Intent.MUSIC_PLAY):
         return RouteResult(
             route_type=RouteType.TASK, 
             tool_name="youtube_play", 
@@ -35,11 +35,11 @@ def route_natural_language(command: str, llm_fn) -> Optional[RouteResult]:
             label="Opening Gmail"
         )
         
-    elif structured.intent == Intent.WINDOWS_APP_OPEN:
+    elif structured.intent in (Intent.WINDOWS_APP_OPEN, Intent.APPLICATION_OPEN, Intent.BROWSER_OPEN):
         app = structured.query or "chrome"
         return RouteResult(
             route_type=RouteType.WINDOWS,
-            tool_name="windows_open_app",
+            tool_name="win_open_application",
             tool_args={"app_name": app},
             label=f"Opening {app}"
         )
@@ -53,6 +53,14 @@ def route_natural_language(command: str, llm_fn) -> Optional[RouteResult]:
             tool_args={"url": url},
             label=f"Searching for '{query}'"
         )
+
+    elif structured.intent == Intent.BROWSER_RESEARCH:
+        if not structured.topic:
+            browser = (structured.browser or "browser").title()
+            return RouteResult(RouteType.CHAT, text=f"Sure. What would you like me to research in {browser}?")
+        import urllib.parse
+        url = f"https://www.google.com/search?q={urllib.parse.quote_plus(structured.topic)}"
+        return RouteResult(RouteType.SEARCH, tool_name="browser_open", tool_args={"url": url}, label=f"Researching {structured.topic}")
         
     elif structured.intent == Intent.SYSTEM_COMMAND:
         # Fallback to general agent for system commands if deterministic missed it

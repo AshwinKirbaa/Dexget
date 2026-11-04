@@ -23,6 +23,7 @@ def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any]
     target_name = route_args.get("target_name")
     location = route_args.get("location")
     location_type = route_args.get("location_type")
+    destination = route_args.get("destination")
     if registry is None:
         from jarvis.agent.tool_registry import ToolRegistry
         from jarvis.tools.filesystem import register
@@ -251,3 +252,28 @@ def execute_filesystem_route(route_args: Dict[str, Any], context: Dict[str, Any]
             return {"success": True, "observation": f"Contents of {loc}:\n{res_str}"}
         except Exception as e:
             return {"success": False, "observation": f"Failed to list {loc}: {e}"}
+
+    if intent in ("FILESYSTEM_COPY", "FILESYSTEM_MOVE"):
+        source_dir = _resolve_location(location, location_type)
+        if not source_dir:
+            return {"success": False, "observation": f"I couldn't find the source folder '{location}'."}
+        destination_dir = _resolve_location(destination, "DIRECTORY")
+        if not destination_dir or not os.path.isdir(destination_dir):
+            return {"success": False, "observation": f"I couldn't find the destination folder '{destination}'."}
+
+        source_path = (source_dir if os.path.basename(os.path.normpath(source_dir)).lower() == (target_name or "").lower()
+                       else os.path.join(source_dir, target_name))
+        if not os.path.exists(source_path):
+            return {"success": False, "observation": f"I couldn't find '{target_name}' in {source_dir}."}
+        destination_path = os.path.join(destination_dir, os.path.basename(os.path.normpath(source_path)))
+        tool = "fs_copy_file" if intent == "FILESYSTEM_COPY" else "fs_move_file"
+        result = registry.execute(tool, source=source_path, destination=destination_path)
+        if not result.success:
+            return result.to_dict()
+        verb = "Copied" if intent == "FILESYSTEM_COPY" else "Moved"
+        context["current_directory"] = destination_dir
+        if on_progress:
+            on_progress(f"[ACT] {verb} {source_path} to {destination_path}")
+        return {"success": True, "observation": f"{verb} {source_path} to {destination_path}"}
+
+    return {"success": False, "observation": f"Unsupported filesystem action: {route_args.get('action')}"}

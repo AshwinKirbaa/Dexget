@@ -130,10 +130,13 @@ def search_start_menu(app_name: str) -> Optional[str]:
                     clean_name = file.lower().replace('.lnk', '').replace(' ', '')
                     if app_name_lower in clean_name or clean_name in app_name_lower:
                         try:
-                            shortcut = shell.CreateShortCut(os.path.join(root, file))
+                            shortcut_path = os.path.join(root, file)
+                            shortcut = shell.CreateShortCut(shortcut_path)
                             target = shortcut.Targetpath
                             if target and os.path.exists(target):
-                                return target
+                                # Return the shortcut itself so Windows preserves
+                                # arguments such as Chrome PWA --app-id values.
+                                return shortcut_path
                         except Exception:
                             pass
     return None

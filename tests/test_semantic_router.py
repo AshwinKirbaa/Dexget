@@ -25,6 +25,11 @@ def test_open():
     assert res.tool_name == "win_open_application"
     assert res.tool_args["app_name"] == "chrome"
 
+def test_natural_browse_request_avoids_model():
+    res = route_natural_language("I need to browse in Chrome")
+    assert res.tool_name == "win_open_application"
+    assert res.tool_args["app_name"] == "chrome"
+
 if __name__ == "__main__":
     test_research()
     test_music()

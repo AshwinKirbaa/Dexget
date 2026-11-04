@@ -38,8 +38,13 @@ Add-AppxPackage -Path dist\JarvisCopilot.msix
 
 ## 5. Testing the Key
 1. Press the physical Copilot key on your keyboard.
-2. **JARVIS** will launch as the main desktop widget.
-3. If JARVIS is already open, pressing the key again will bring the widget to the foreground and focus it instead of launching a second instance.
+2. JARVIS starts the local Ollama service, verifies the configured model is
+   installed, downloads it when missing, and warms it before enabling model tasks.
+3. **JARVIS** will launch as the main desktop widget.
+4. If JARVIS is already open, pressing the key again will bring the widget to the foreground and focus it instead of launching a second instance.
+
+The default model is `gemma3:4b`, configured by `JARVIS_OLLAMA_MODEL` in `.env`.
+The first key press can take longer if the model still needs to be downloaded.
 
 ## 6. Uninstall / Reinstall
 To completely uninstall the JARVIS package from Windows:

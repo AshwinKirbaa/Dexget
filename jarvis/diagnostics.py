@@ -28,7 +28,13 @@ def check():
     report["unavailable_capabilities"] = registry.unavailable
     
     # Automation Backend Checks
-    report["semantic_router"] = "local_router (enabled)"
+    jev_mode = os.getenv("JARVIS_JEV_MODE", "shadow").lower()
+    jev_configured = bool(os.getenv("TYPESAFE_API_KEY", "").strip())
+    report["semantic_router"] = {
+        "jev_mode": jev_mode,
+        "jev_configured": jev_configured,
+        "active": "jev" if jev_mode == "active" and jev_configured else "local_router",
+    }
     report["cancellation_support"] = "available"
     
     # Timeouts
@@ -71,7 +77,10 @@ def check():
 
     # Audio I/O
     try:
-        import pyaudiowpatch as pyaudio
+        try:
+            import pyaudiowpatch as pyaudio
+        except ImportError:
+            import pyaudio
         p = pyaudio.PyAudio()
         report["audio"] = {
             "input": p.get_default_input_device_info()['name'],

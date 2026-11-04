@@ -119,7 +119,14 @@ class BrowserUseBackend(AutomationBackend):
         url: Optional[str] = None,
     ):
         if self.playwright:
-            return
+            if self.external_browser:
+                return
+            try:
+                if self.page and not self.page.is_closed():
+                    return
+            except Exception:
+                pass
+            await self._dispose_session(stop_playwright=True)
 
         from playwright.async_api import async_playwright
         self.playwright = await async_playwright().start()
@@ -141,6 +148,11 @@ class BrowserUseBackend(AutomationBackend):
         profile_dir: str,
         url: Optional[str],
     ):
+        session_mode = os.environ.get("JARVIS_BROWSER_SESSION_MODE", "dedicated").lower()
+        if session_mode != "attach":
+            await self._init_dedicated_profile_browser(browser_exec, profile_dir, url)
+            return
+
         from jarvis.tasks.account_discovery import get_browser_user_data_dir
 
         user_data_dir = get_browser_user_data_dir(browser_exec or "chrome")
@@ -202,6 +214,40 @@ class BrowserUseBackend(AutomationBackend):
         self.context = None
         self.page = None
         self.connection_state[BrowserConnectionState.SESSION_ATTACHED] = False
+
+    async def _init_dedicated_profile_browser(
+        self,
+        browser_exec: Optional[str],
+        profile_dir: str,
+        url: Optional[str],
+    ):
+        """Launch a reusable automation profile without CDP consent prompts."""
+        browser_name = (browser_exec or "chrome").lower()
+        safe_profile = "".join(c if c.isalnum() or c in "-_" else "_" for c in (profile_dir or "Default"))
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        user_data_dir = os.path.join(base, "JarvisAgent", "browser-automation", f"{browser_name}-{safe_profile}")
+        os.makedirs(user_data_dir, exist_ok=True)
+
+        executable_path = (
+            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
+            if browser_name == "brave"
+            else _chrome_exe_path()
+        )
+        self.context = await self.playwright.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            executable_path=executable_path if os.path.exists(executable_path) else None,
+            headless=False,
+            args=["--no-first-run", "--no-default-browser-check", "--disable-infobars"],
+            ignore_default_args=["--enable-automation", "--no-sandbox"],
+        )
+        self.browser = None
+        self.external_browser = False
+        self.connection_state[BrowserConnectionState.PROFILE_EXISTS] = True
+        self.connection_state[BrowserConnectionState.CHROME_RUNNING] = True
+        self.connection_state[BrowserConnectionState.REMOTE_DEBUG_ENABLED] = False
+        self.connection_state[BrowserConnectionState.SESSION_DETECTED] = True
+        self.connection_state[BrowserConnectionState.SESSION_ATTACHED] = True
+        self.page = await self._find_or_create_page(url)
 
     async def _find_or_create_page(self, url: Optional[str]):
         if not self.context:
@@ -402,6 +448,20 @@ class BrowserUseBackend(AutomationBackend):
             await self._update_state()
             return True
         except Exception as e:
+            message = str(e).lower()
+            if "closed" in message or "target page" in message or "target context" in message:
+                try:
+                    await self._dispose_session(stop_playwright=True)
+                    await self._init_browser(browser_exec=browser_exec, profile_dir=profile_dir, url=None)
+                    if self.external_browser:
+                        return True
+                    if self.page:
+                        await self.page.goto(url, wait_until="domcontentloaded")
+                        await self._update_state()
+                        return True
+                except Exception as retry_error:
+                    print(f"Navigate retry failed: {retry_error}")
+                    return False
             print(f"Navigate failed: {e}")
             return False
 
@@ -429,19 +489,30 @@ class BrowserUseBackend(AutomationBackend):
         obs = self.observe()
         return expected_condition.lower() in obs.text_representation.lower()
 
-    async def async_cancel(self):
+    async def _dispose_session(self, stop_playwright: bool = False):
+        if self.context:
+            try:
+                await self.context.close()
+            except Exception:
+                pass
+            self.context = None
         if self.browser:
             try:
                 await self.browser.close()
             except Exception:
                 pass
             self.browser = None
-        if self.playwright:
+        self.page = None
+        self.external_browser = False
+        if stop_playwright and self.playwright:
             try:
                 await self.playwright.stop()
             except Exception:
                 pass
             self.playwright = None
+
+    async def async_cancel(self):
+        await self._dispose_session(stop_playwright=True)
 
     def cancel(self):
         try:

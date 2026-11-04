@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import webbrowser
@@ -106,7 +107,7 @@ def open_application(app_name: str) -> ToolResult:
             _log(f"[APPLICATION] Launching {target.title()}")
             
             if executable.endswith('.lnk'):
-                subprocess.Popen(executable, shell=True)
+                os.startfile(executable)
             elif "\\" in executable or "/" in executable:
                 subprocess.Popen([executable])
             else:
@@ -139,6 +140,13 @@ def open_application(app_name: str) -> ToolResult:
             if check_running_process(target):
                 _log(f"[OK] {target.title()} is running.")
                 return ToolResult(True, output=app_name, observation=f"{target.title()} is open and running.")
+            elif app_info["method"] == "start_menu" and executable.lower().endswith(".lnk"):
+                # Chrome/Edge PWAs run inside their browser process and often
+                # have no process whose name matches the shortcut. ShellExecute
+                # accepting the registered shortcut is the reliable launch
+                # boundary; do not report a false failure afterward.
+                _log(f"[OK] {target.title()} shortcut launched.")
+                return ToolResult(True, output=app_name, observation=f"{target.title()} was launched.")
             else:
                 return ToolResult(False, error="verify_failed", observation=f"I tried to launch {target.title()}, but couldn't verify it is running.")
         else:
@@ -298,7 +306,14 @@ def get_storage_info() -> ToolResult:
             })
         except PermissionError:
             continue
-    return ToolResult(True, output=drives, observation=f"Found {len(drives)} drives.")
+    if not drives:
+        return ToolResult(False, error="no_drives", observation="No accessible storage drives were found.")
+    lines = [
+        f"{drive['device']} {drive['used_gb']} GB used of {drive['total_gb']} GB "
+        f"({drive['free_gb']} GB free, {drive['percent']}% used)"
+        for drive in drives
+    ]
+    return ToolResult(True, output=drives, observation="Storage:\n" + "\n".join(lines))
 
 def get_gpu_info() -> ToolResult:
     if not IS_WINDOWS:
@@ -362,6 +377,51 @@ def lock_pc() -> ToolResult:
         return ToolResult(True, observation="PC locked")
     except Exception as exc:
         return ToolResult(False, error=str(exc), observation=f"Could not lock PC: {exc}")
+
+
+SETTINGS_PAGES = {
+    "home": "ms-settings:",
+    "system": "ms-settings:system",
+    "display": "ms-settings:display",
+    "sound": "ms-settings:sound",
+    "notifications": "ms-settings:notifications",
+    "power": "ms-settings:powersleep",
+    "power and battery": "ms-settings:powersleep",
+    "storage": "ms-settings:storagesense",
+    "bluetooth": "ms-settings:bluetooth",
+    "network": "ms-settings:network",
+    "wifi": "ms-settings:network-wifi",
+    "wi-fi": "ms-settings:network-wifi",
+    "apps": "ms-settings:appsfeatures",
+    "accounts": "ms-settings:accounts",
+    "sign in": "ms-settings:signinoptions",
+    "sign-in": "ms-settings:signinoptions",
+    "time": "ms-settings:dateandtime",
+    "language": "ms-settings:regionlanguage",
+    "gaming": "ms-settings:gaming-gamebar",
+    "accessibility": "ms-settings:easeofaccess",
+    "privacy": "ms-settings:privacy",
+    "windows update": "ms-settings:windowsupdate",
+    "update": "ms-settings:windowsupdate",
+    "about": "ms-settings:about",
+    "specifications": "ms-settings:about",
+}
+
+
+def open_settings(page: str = "home") -> ToolResult:
+    """Open a known Windows Settings page without UI automation."""
+    if not IS_WINDOWS:
+        return ToolResult(False, error="not_windows", observation="Settings are only supported on Windows")
+    normalized = re.sub(r"\s+", " ", (page or "home").strip().lower())
+    uri = SETTINGS_PAGES.get(normalized)
+    if not uri:
+        choices = ", ".join(sorted(SETTINGS_PAGES))
+        return ToolResult(False, error="unknown_settings_page", observation=f"Unknown settings page '{page}'. Available pages: {choices}")
+    try:
+        os.startfile(uri)
+        return ToolResult(True, output=uri, observation=f"Opened {normalized} settings")
+    except Exception as exc:
+        return ToolResult(False, error=str(exc), observation=f"Could not open {normalized} settings: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -438,12 +498,13 @@ def brightness_down() -> ToolResult:
 def _get_pycaw_volume():
     """Return (IAudioEndpointVolume proxy, None) or (None, error_str)."""
     try:
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-        from ctypes import POINTER, cast
-        from comtypes import CLSCTX_ALL
+        from pycaw.pycaw import AudioUtilities
         devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        volume = cast(interface, POINTER(IAudioEndpointVolume))
+        if not devices:
+            return None, "No speakers/audio output device found."
+        volume = devices.EndpointVolume
+        if not volume:
+            return None, "Could not access endpoint volume."
         return volume, None
     except ImportError:
         return None, "pycaw not installed — run: pip install pycaw"
@@ -551,6 +612,61 @@ def restart_pc() -> ToolResult:
         return ToolResult(False, error=str(exc), observation=f"Could not schedule restart: {exc}")
 
 
+def sign_out_pc() -> ToolResult:
+    """Sign out of the current Windows session immediately."""
+    if not IS_WINDOWS:
+        return ToolResult(False, error="not_windows", observation="Sign out is only supported on Windows")
+    try:
+        subprocess.Popen(["shutdown", "/l"])
+        return ToolResult(True, observation="Signing out of Windows")
+    except Exception as exc:
+        return ToolResult(False, error=str(exc), observation=f"Could not sign out: {exc}")
+
+
+POWER_SCHEMES = {
+    "balanced": "SCHEME_BALANCED",
+    "performance": "SCHEME_MIN",
+    "high performance": "SCHEME_MIN",
+    "low": "SCHEME_MAX",
+    "power saver": "SCHEME_MAX",
+    "battery saver": "SCHEME_MAX",
+}
+
+
+def set_power_mode(mode: str) -> ToolResult:
+    """Activate a built-in Windows power scheme via powercfg."""
+    if not IS_WINDOWS:
+        return ToolResult(False, error="not_windows", observation="Power modes are only supported on Windows")
+    normalized = re.sub(r"\s+", " ", (mode or "").strip().lower())
+    scheme = POWER_SCHEMES.get(normalized)
+    if not scheme:
+        return ToolResult(False, error="invalid_power_mode", observation="Use balanced, performance, or power saver.")
+    try:
+        result = subprocess.run(["powercfg", "/setactive", scheme], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            error = result.stderr.strip() or result.stdout.strip() or "The requested power scheme is unavailable."
+            return ToolResult(False, error=error, observation=f"Could not switch power mode: {error}")
+        return ToolResult(True, output=normalized, observation=f"Power mode switched to {normalized}")
+    except Exception as exc:
+        return ToolResult(False, error=str(exc), observation=f"Could not switch power mode: {exc}")
+
+
+def get_power_mode() -> ToolResult:
+    if not IS_WINDOWS:
+        return ToolResult(False, error="not_windows", observation="Power modes are only supported on Windows")
+    try:
+        result = subprocess.run(["powercfg", "/getactivescheme"], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            error = result.stderr.strip() or result.stdout.strip()
+            return ToolResult(False, error=error, observation=f"Could not read power mode: {error}")
+        output = result.stdout.strip()
+        name_match = re.search(r"\((.+?)\)\s*$", output)
+        name = name_match.group(1) if name_match else output
+        return ToolResult(True, output=name, observation=f"Current power mode: {name}")
+    except Exception as exc:
+        return ToolResult(False, error=str(exc), observation=f"Could not read power mode: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -566,7 +682,7 @@ def get_pwa_shortcut(app_name: str) -> Optional[str]:
                 return os.path.join(root, file)
     return None
 
-def win_youtube_search(query: str, app: str) -> ToolResult:
+def win_youtube_search(query: str, app: str, profile: str = "Default") -> ToolResult:
     is_music = 'music' in app.lower()
     
     # 1. Get Video ID using native urllib to scrape youtube search
@@ -607,14 +723,24 @@ def win_youtube_search(query: str, app: str) -> ToolResult:
         shell = win32com.client.Dispatch('WScript.Shell')
         sc = shell.CreateShortCut(shortcut)
         
-        target = sc.TargetPath
-        args = sc.Arguments
+        play_url = (f'https://music.youtube.com/watch?v={video_id}&autoplay=1'
+                    if is_music else f'https://www.youtube.com/watch?v={video_id}&autoplay=1')
         
-        play_url = f'https://music.youtube.com/watch?v={video_id}' if is_music else f'https://www.youtube.com/watch?v={video_id}'
-        
-        cmd = f'"{target}" {args} "{play_url}"'
-        subprocess.Popen(cmd, shell=True)
-        return ToolResult(True, output=play_url, observation=f'Found "{title}" and played in {app}')
+        # chrome_proxy + --app-id ignores a new URL when that PWA is already
+        # running; it merely focuses the Home page.  Start Chrome's app-window
+        # mode at the exact watch URL instead.  This preserves the selected
+        # profile/login while guaranteeing that the requested track navigates.
+        chrome_dir = os.path.dirname(sc.TargetPath)
+        chrome_exe = os.path.join(chrome_dir, "chrome.exe")
+        if not os.path.isfile(chrome_exe):
+            chrome_exe = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        launch_args = [chrome_exe, f"--profile-directory={profile}"]
+        if is_music:
+            launch_args.append(f"--app={play_url}")
+        else:
+            launch_args.append(play_url)
+        subprocess.Popen(launch_args)
+        return ToolResult(True, output=play_url, observation=f'Opened "{title}" for playback in {app}')
     except Exception as e:
         return ToolResult(False, error=str(e), observation=f'Failed to launch {app}: {e}')
 
@@ -624,6 +750,7 @@ def register(registry) -> None:
     registry.register(Tool("win_close_application", "Close/kill a running application by name.", {"app_name": {"type": "str", "required": True}}, RiskLevel.MEDIUM, close_application, "windows"))
     registry.register(Tool("win_open_folder", "Open a folder in File Explorer.", {"path": {"type": "str", "required": True}}, RiskLevel.LOW, open_folder, "windows"))
     registry.register(Tool("win_open_website", "Open a URL in default browser.", {"url": {"type": "str", "required": True}}, RiskLevel.LOW, open_website, "windows"))
+    registry.register(Tool("win_open_settings", "Open a Windows Settings page.", {"page": {"type": "str", "required": False}}, RiskLevel.LOW, open_settings, "windows"))
     registry.register(Tool("win_browser_search", "Open browser and search.", {"browser": {"type": "str", "required": True}, "query": {"type": "str", "required": True}, "profile": {"type": "str", "required": False}}, RiskLevel.LOW, win_browser_search, "windows"))
 
     # --- System Information Tools ---
@@ -707,7 +834,7 @@ def register(registry) -> None:
     registry.register(Tool(
         name="win_youtube_search",
         description="Search and play a video directly in the installed YouTube or YouTube Music app.",
-        parameters={"query": {"type": "str", "required": True}, "app": {"type": "str", "required": True}},
+        parameters={"query": {"type": "str", "required": True}, "app": {"type": "str", "required": True}, "profile": {"type": "str", "required": False}},
         risk_level=RiskLevel.LOW, func=win_youtube_search, category="windows"))
 
     # --- Power ---
@@ -728,3 +855,21 @@ def register(registry) -> None:
         description="Schedule a system restart in 30 seconds. Run 'shutdown /a' to cancel.",
         parameters={},
         risk_level=RiskLevel.HIGH, func=restart_pc, category="windows"))
+
+    registry.register(Tool(
+        name="win_sign_out",
+        description="Sign out of the current Windows session immediately.",
+        parameters={},
+        risk_level=RiskLevel.DESTRUCTIVE, func=sign_out_pc, category="windows"))
+
+    registry.register(Tool(
+        name="win_set_power_mode",
+        description="Switch Windows power mode to balanced, performance, or power saver.",
+        parameters={"mode": {"type": "str", "required": True}},
+        risk_level=RiskLevel.MEDIUM, func=set_power_mode, category="windows"))
+
+    registry.register(Tool(
+        name="win_get_power_mode",
+        description="Get the active Windows power mode.",
+        parameters={},
+        risk_level=RiskLevel.LOW, func=get_power_mode, category="windows"))

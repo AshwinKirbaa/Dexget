@@ -12,6 +12,7 @@ class FilesystemIntent:
     location: Optional[str] # usually an absolute path or drive letter
     location_type: str # "DRIVE", "DIRECTORY", "UNSPECIFIED"
     action: str
+    destination: Optional[str] = None
 
 def get_available_drives() -> List[str]:
     return [f"{d}:\\" for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
@@ -51,6 +52,24 @@ def parse_filesystem_command(cmd: str) -> Optional[FilesystemIntent]:
         "copy": "FILESYSTEM_COPY"
     }
     intent = intent_map.get(action, "FILESYSTEM_OPEN")
+
+    # Transfers have both a source and a destination. Parse them before the
+    # generic location handling so "to Documents" is not part of the name.
+    destination = None
+    if action in ("copy", "move"):
+        rest = re.sub(r"\s+and\s+paste(?:\s+it)?\s+(?:in|into|to)\s+", " to ", rest, flags=re.IGNORECASE)
+        transfer = re.match(
+            r"^(.+?)\s+(?:from|in|inside|at)\s+(.+?)\s+to\s+(.+)$",
+            rest, re.IGNORECASE,
+        )
+        if transfer:
+            target_part, source_part, destination = (p.strip() for p in transfer.groups())
+            rest = f"{target_part} in {source_part}"
+        else:
+            transfer = re.match(r"^(.+?)\s+to\s+(.+)$", rest, re.IGNORECASE)
+            if transfer:
+                target_part, destination = (p.strip() for p in transfer.groups())
+                rest = target_part
     
     # Check for direct drive access: "open D drive" or "go to D:"
     drive_match = re.match(r"^(?:the\s+)?(?:local\s+disk\s+|drive\s+)?([a-z])(?:[:\\]+)?(?:\s+drive)?$", rest, re.IGNORECASE)
@@ -154,5 +173,5 @@ def parse_filesystem_command(cmd: str) -> Optional[FilesystemIntent]:
         target_type=target_type,
         location=location,
         location_type=location_type,
-        action=action
+        action=action, destination=destination
     )

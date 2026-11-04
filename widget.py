@@ -1,11 +1,17 @@
 import sys
 import threading
 import queue
+import asyncio
+import time
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout, 
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
-                             QFrame, QSizePolicy)
-from PyQt6.QtCore import Qt, QPoint, QThread, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QBrush, QPen
+                             QFrame, QSizePolicy, QGraphicsDropShadowEffect,
+                             QGraphicsOpacityEffect)
+from PyQt6.QtCore import (Qt, QPoint, QThread, pyqtSignal, QTimer, QSize,
+                          QRect, QPropertyAnimation, QEasingCurve,
+                          QSequentialAnimationGroup, QParallelAnimationGroup)
+from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
+                         QPainterPath, QRegion, QCursor, QPixmap)
 
 import jarvis_integration
 
@@ -129,6 +135,90 @@ class JarvisWorker(QThread):
             self.commands.put(text)
             return True
 
+
+class MediaSessionWorker(QThread):
+    """Poll Windows' global media session without blocking the Qt UI."""
+    media_changed = pyqtSignal(object)
+
+    def __init__(self):
+        super().__init__()
+        self.shutdown_event = threading.Event()
+        self.actions = queue.Queue()
+
+    def run(self):
+        try:
+            asyncio.run(self._run_media_loop())
+        except Exception:
+            self.media_changed.emit({})
+
+    async def _run_media_loop(self):
+        from winrt.windows.media.control import (
+            GlobalSystemMediaTransportControlsSessionManager as SessionManager,
+            GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
+        )
+        manager = await SessionManager.request_async()
+        previous = None
+        while not self.shutdown_event.is_set():
+            session = manager.get_current_session()
+            while session and not self.actions.empty():
+                action = self.actions.get_nowait()
+                if action == "previous":
+                    await session.try_skip_previous_async()
+                elif action == "next":
+                    await session.try_skip_next_async()
+                elif action == "play_pause":
+                    info = session.get_playback_info()
+                    if info.playback_status == PlaybackStatus.PLAYING:
+                        await session.try_pause_async()
+                    else:
+                        await session.try_play_async()
+            current = {}
+            if session:
+                try:
+                    props = await session.try_get_media_properties_async()
+                    info = session.get_playback_info()
+                    artwork = await self._read_thumbnail(props.thumbnail)
+                    current = {
+                        "title": (props.title or "Now playing").strip(),
+                        "artist": (props.artist or props.album_artist or "").strip(),
+                        "app": session.source_app_user_model_id or "Media",
+                        "playing": info.playback_status == PlaybackStatus.PLAYING,
+                        "artwork": artwork,
+                    }
+                except Exception:
+                    current = {}
+            if current != previous:
+                previous = current
+                self.media_changed.emit(current)
+            await asyncio.sleep(1.0)
+
+    @staticmethod
+    async def _read_thumbnail(thumbnail):
+        """Return the current media artwork as encoded image bytes."""
+        if not thumbnail:
+            return b""
+        try:
+            from winrt.windows.storage.streams import DataReader
+            stream = await thumbnail.open_read_async()
+            size = min(int(stream.size), 8 * 1024 * 1024)
+            if size <= 0:
+                return b""
+            reader = DataReader(stream)
+            loaded = int(await reader.load_async(size))
+            data = bytearray(loaded)
+            reader.read_bytes(data)
+            reader.close()
+            stream.close()
+            return bytes(data)
+        except Exception:
+            return b""
+
+    def control(self, action):
+        self.actions.put(action)
+
+    def shutdown(self):
+        self.shutdown_event.set()
+
 class MessageWidget(QWidget):
     def __init__(self, role, text):
         super().__init__()
@@ -157,9 +247,45 @@ class MessageWidget(QWidget):
         self.setLayout(layout)
 
 class JarvisWidget(QWidget):
+    HIDDEN_SIZE = QSize(120, 4)
+    COLLAPSED_SIZE = QSize(300, 48)
+    MEDIA_SIZE = QSize(520, 60)
+    MEDIA_MIN_WIDTH = 400
+    MEDIA_BASE_WIDTH = 300
+    EXPANDED_SIZE = QSize(440, 430)
+    TOP_MARGIN = 8
+    HOT_ZONE_WIDTH = 140
+    HOT_ZONE_HEIGHT = 12
+
     def __init__(self):
         super().__init__()
+        self.is_expanded = False
+        self._animation = None
+        self._content_animation = None
+        self._media = {}
+        self._media_manually_hidden = False
+        self._auto_hidden = False
+        self._hover_leave_at = None
+        self._assistant_state = "Idle"
+        self._assistant_subtitle = "Ready"
+        self._last_media_key = None
+        self._pulse_phase = False
+        self._collapse_timer = QTimer(self)
+        self._collapse_timer.setSingleShot(True)
+        self._collapse_timer.timeout.connect(self.collapse_island)
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setInterval(40)
+        self._hover_timer.timeout.connect(self._check_hot_zone)
+        self._hover_timer.start()
+        self._media_pulse_timer = QTimer(self)
+        self._media_pulse_timer.setInterval(520)
+        self._media_pulse_timer.timeout.connect(self._pulse_media_indicator)
+        self._media_pulse_timer.start()
         self.initUI()
+        # Copilot/startup presents only the compact island. The conversation
+        # panel opens later when the user clicks the island.
+        self.scroll_area.hide()
+        self.input_frame.hide()
         
         self.worker = JarvisWorker()
         self.agent = jarvis_integration.build_agent(
@@ -174,16 +300,21 @@ class JarvisWidget(QWidget):
         self.worker.finished.connect(self.close)
         self._closing = False
         self.worker.start()
+        self.media_worker = MediaSessionWorker()
+        self.media_worker.media_changed.connect(self.update_media)
+        self.media_worker.start()
         if self.agent.registry.unavailable:
             self.add_message("Jarvis", "Unavailable capabilities: " +
                              "; ".join(f"{name}: {error}" for name, error in self.agent.registry.unavailable.items()))
+        QTimer.singleShot(0, self._place_top_center)
+        QTimer.singleShot(3500, self.collapse_island)
 
     def initUI(self):
         # Frameless window and Tool flag so it doesn't show in the taskbar
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool |
                             Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(400, 400)
+        self.resize(self.EXPANDED_SIZE)
         
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -194,25 +325,67 @@ class JarvisWidget(QWidget):
         self.container.setObjectName("Container")
         self.container.setStyleSheet("""
             #Container {
-                background-color: rgba(20, 20, 20, 220);
-                border-radius: 15px;
-                border: 1px solid rgba(255, 255, 255, 40);
+                background-color: rgba(12, 14, 18, 244);
+                border-radius: 28px;
+                border: 1px solid rgba(255, 255, 255, 48);
             }
         """)
+        # Avoid QGraphicsDropShadowEffect here. On a translucent top-level
+        # Windows window it re-rasterizes the entire surface on every resize
+        # frame and produces visible flashes during pill-to-panel expansion.
         container_layout = QVBoxLayout(self.container)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
         
         # --- Title Bar (Draggable) ---
         self.title_bar = QFrame()
-        self.title_bar.setFixedHeight(40)
+        self.title_bar.setFixedHeight(48)
         title_layout = QHBoxLayout(self.title_bar)
-        title_layout.setContentsMargins(15, 0, 10, 0)
+        title_layout.setContentsMargins(14, 0, 12, 0)
+
+        self.status_dot = QLabel("●")
+        self.status_dot.setFixedWidth(18)
+        self.status_dot.setStyleSheet("color: #39e58c; font-size: 15px;")
+
+        self.album_art = QLabel()
+        self.album_art.setFixedSize(40, 40)
+        self.album_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.album_art.setStyleSheet("background: #202329; border-radius: 5px;")
+        self.album_art.hide()
+
+        identity_layout = QVBoxLayout()
+        identity_layout.setContentsMargins(0, 7, 0, 7)
+        identity_layout.setSpacing(0)
+        self.name_label = QLabel("DEXGET")
+        self.name_label.setMaximumWidth(200)
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.name_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.name_label.setStyleSheet("color: white; letter-spacing: 1px;")
         
-        self.status_label = QLabel("JARVIS Ready")
+        self.status_label = QLabel("Ready")
         self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self.status_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        self.status_label.setStyleSheet("color: #E0E0E0;")
+        self.status_label.setFont(QFont("Segoe UI", 9))
+        self.status_label.setStyleSheet("color: #9da7b3;")
+        identity_layout.addWidget(self.name_label)
+        identity_layout.addWidget(self.status_label)
+
+        self.expand_btn = QPushButton("⌄")
+        self.expand_btn.setFixedSize(28, 28)
+        self.expand_btn.setStyleSheet("""
+            QPushButton { background: transparent; border: none;
+                          color: #b9c0c8; font-size: 16px; }
+            QPushButton:hover { color: white; }
+        """)
+        self.expand_btn.clicked.connect(self.toggle_island)
+
+        self.previous_btn = self._media_button("|◀")
+        self.play_pause_btn = self._media_button("▶", primary=True)
+        self.next_btn = self._media_button("▶|")
+        self.media_hide_btn = self._media_button("−")
+        self.previous_btn.clicked.connect(lambda: self.media_worker.control("previous"))
+        self.play_pause_btn.clicked.connect(lambda: self.media_worker.control("play_pause"))
+        self.next_btn.clicked.connect(lambda: self.media_worker.control("next"))
+        self.media_hide_btn.clicked.connect(self.hide_media_island)
         
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(24, 24)
@@ -229,13 +402,21 @@ class JarvisWidget(QWidget):
         """)
         close_btn.clicked.connect(QApplication.quit)
         
-        title_layout.addWidget(self.status_label)
-        title_layout.addStretch()
+        title_layout.addWidget(self.status_dot)
+        title_layout.addWidget(self.album_art)
+        # The metadata block owns the remaining width. A separate stretch here
+        # collapses this layout to zero because its labels use Ignored sizing.
+        title_layout.addLayout(identity_layout, 1)
+        title_layout.addWidget(self.previous_btn)
+        title_layout.addWidget(self.play_pause_btn)
+        title_layout.addWidget(self.next_btn)
+        title_layout.addWidget(self.media_hide_btn)
         title_layout.addWidget(close_btn)
+        self._set_media_controls_visible(False)
         
         # Event filters for dragging
         self.title_bar.mousePressEvent = self.title_mousePressEvent
-        self.title_bar.mouseMoveEvent = self.title_mouseMoveEvent
+        self.title_bar.mouseReleaseEvent = self.title_mouseReleaseEvent
         
         # --- Chat History Area ---
         self.scroll_area = QScrollArea()
@@ -263,17 +444,23 @@ class JarvisWidget(QWidget):
         self.chat_layout.setSpacing(10)
         
         self.scroll_area.setWidget(self.chat_container)
+        self.scroll_opacity = QGraphicsOpacityEffect(self.scroll_area)
+        self.scroll_opacity.setOpacity(1.0)
+        self.scroll_area.setGraphicsEffect(self.scroll_opacity)
         
         # --- Input Area ---
-        input_frame = QFrame()
-        input_frame.setStyleSheet("""
+        self.input_frame = QFrame()
+        self.input_frame.setStyleSheet("""
             QFrame {
                 background-color: rgba(40, 40, 40, 200);
                 border-radius: 10px;
                 margin: 10px;
             }
         """)
-        input_layout = QHBoxLayout(input_frame)
+        self.input_opacity = QGraphicsOpacityEffect(self.input_frame)
+        self.input_opacity.setOpacity(1.0)
+        self.input_frame.setGraphicsEffect(self.input_opacity)
+        input_layout = QHBoxLayout(self.input_frame)
         input_layout.setContentsMargins(10, 5, 10, 5)
         
         self.mic_btn = QPushButton("🎤")
@@ -335,7 +522,7 @@ class JarvisWidget(QWidget):
         # Assemble
         container_layout.addWidget(self.title_bar)
         container_layout.addWidget(self.scroll_area)
-        container_layout.addWidget(input_frame)
+        container_layout.addWidget(self.input_frame)
         
         main_layout.addWidget(self.container)
         self.setLayout(main_layout)
@@ -357,17 +544,295 @@ class JarvisWidget(QWidget):
         self.confirmation_panel.hide()
         self.add_message("Jarvis", "Describe a desktop or browser task. I’ll show progress here. Use Stop to cancel. Enable the microphone for voice input.")
 
+    def _target_geometry(self, size):
+        screen = self.screen() or QApplication.primaryScreen()
+        area = screen.availableGeometry()
+        x = area.x() + (area.width() - size.width()) // 2
+        y = area.y() if size == self.HIDDEN_SIZE else area.y() + self.TOP_MARGIN
+        return QRect(x, y, size.width(), size.height())
+
+    def _media_button(self, text, primary=False):
+        button = QPushButton(text)
+        button.setFixedSize(32 if primary else 28, 32)
+        button.setFont(QFont("Segoe UI Symbol", 15 if primary else 12,
+                             QFont.Weight.DemiBold))
+        button.setStyleSheet("""
+            QPushButton { background: transparent; border: none; color: white; }
+            QPushButton:hover { color: #70cfff; }
+            QPushButton:pressed { color: #2d9cff; }
+        """)
+        return button
+
+    def _set_media_controls_visible(self, visible):
+        self.album_art.setVisible(visible)
+        self.previous_btn.setVisible(visible)
+        self.play_pause_btn.setVisible(visible)
+        self.next_btn.setVisible(visible)
+        self.media_hide_btn.setVisible(visible)
+
+    def _compact_size(self):
+        if not self._media:
+            return self.COLLAPSED_SIZE
+        title = self._media.get("title", "Now playing")
+        artist = self._media.get("artist") or self._media.get("app", "Media")
+        text_width = max(
+            self.name_label.fontMetrics().horizontalAdvance(title),
+            self.status_label.fontMetrics().horizontalAdvance(artist),
+        )
+        text_width = max(80, min(self.name_label.maximumWidth(), text_width + 8))
+        width = max(self.MEDIA_MIN_WIDTH,
+                    min(self.MEDIA_SIZE.width(), self.MEDIA_BASE_WIDTH + text_width))
+        return QSize(width, self.MEDIA_SIZE.height())
+
+    def _place_top_center(self):
+        size = self.EXPANDED_SIZE if self.is_expanded else self._compact_size()
+        self.setGeometry(self._target_geometry(size))
+
+    def _animate_to(self, size, duration=320, curve=QEasingCurve.Type.OutQuint):
+        if self._animation:
+            self._animation.stop()
+        self._animation = QPropertyAnimation(self, b"geometry", self)
+        self._animation.setDuration(duration)
+        self._animation.setEasingCurve(curve)
+        self._animation.setStartValue(self.geometry())
+        self._animation.setEndValue(self._target_geometry(size))
+        self._animation.start()
+
+    def _animate_media_bump(self):
+        """A subtle live-activity breathe when the playing item changes."""
+        if self._animation:
+            self._animation.stop()
+        compact = self._compact_size()
+        base = self._target_geometry(compact)
+        bump_size = QSize(compact.width() + 14, compact.height() + 4)
+        bump = self._target_geometry(bump_size)
+        grow = QPropertyAnimation(self, b"geometry")
+        grow.setDuration(105)
+        grow.setEasingCurve(QEasingCurve.Type.OutCubic)
+        grow.setStartValue(self.geometry())
+        grow.setEndValue(bump)
+        settle = QPropertyAnimation(self, b"geometry")
+        settle.setDuration(260)
+        settle.setEasingCurve(QEasingCurve.Type.OutBack)
+        settle.setStartValue(bump)
+        settle.setEndValue(base)
+        sequence = QSequentialAnimationGroup(self)
+        sequence.addAnimation(grow)
+        sequence.addAnimation(settle)
+        self._animation = sequence
+        sequence.start()
+
+    def _fade_expanded_content(self):
+        if not self.is_expanded:
+            return
+        if self._content_animation:
+            self._content_animation.stop()
+        scroll_fade = QPropertyAnimation(self.scroll_opacity, b"opacity")
+        scroll_fade.setDuration(190)
+        scroll_fade.setStartValue(0.0)
+        scroll_fade.setEndValue(1.0)
+        input_fade = QPropertyAnimation(self.input_opacity, b"opacity")
+        input_fade.setDuration(190)
+        input_fade.setStartValue(0.0)
+        input_fade.setEndValue(1.0)
+        group = QParallelAnimationGroup(self)
+        group.addAnimation(scroll_fade)
+        group.addAnimation(input_fade)
+        self._content_animation = group
+        group.start()
+
+    def _show_expanded_content(self):
+        if not self.is_expanded:
+            return
+        self.scroll_area.show()
+        self.input_frame.show()
+        self._fade_expanded_content()
+
+    def expand_island(self, focus_input=False):
+        self._collapse_timer.stop()
+        self._auto_hidden = False
+        self._media_manually_hidden = False
+        self.setWindowOpacity(1.0)
+        self.is_expanded = True
+        self.scroll_opacity.setOpacity(0.0)
+        self.input_opacity.setOpacity(0.0)
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        if not self.confirmation_panel.isHidden() or self.confirmation_label.text():
+            self.confirmation_panel.setVisible(not self.confirmation_panel.isHidden())
+        self.expand_btn.setText("⌃")
+        self._animate_to(self.EXPANDED_SIZE, 400, QEasingCurve.Type.OutQuint)
+        # Let the black island surface establish first; adding the complex
+        # scroll/input layout at the same instant as the native resize causes
+        # a one-frame flash on DWM layered windows.
+        QTimer.singleShot(145, self._show_expanded_content)
+        if focus_input:
+            QTimer.singleShot(230, self.input_field.setFocus)
+
+    def collapse_island(self):
+        if not hasattr(self, "worker") or self.worker.busy.is_set() or not self.confirmation_panel.isHidden():
+            return
+        if self.input_field.hasFocus() and self.input_field.text():
+            return
+        if self._assistant_state == "Idle" and not self._media:
+            self.hide_idle_island()
+            return
+        self.is_expanded = False
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.expand_btn.setText("⌄")
+        self._animate_to(self._compact_size(), 330, QEasingCurve.Type.InOutCubic)
+
+    def hide_idle_island(self):
+        if (self.worker.busy.is_set()
+                or (self._media and self._media.get("playing") and not self._media_manually_hidden)
+                or not self.confirmation_panel.isHidden()):
+            return
+        self.is_expanded = False
+        self._auto_hidden = True
+        self._hover_leave_at = None
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.expand_btn.setText("⌄")
+        self.setWindowOpacity(0.03)
+        self._animate_to(self.HIDDEN_SIZE, 240, QEasingCurve.Type.InBack)
+
+    def hide_media_island(self):
+        """Hide the UI without stopping either background worker."""
+        self._media_manually_hidden = True
+        self.is_expanded = False
+        self._auto_hidden = True
+        self._hover_leave_at = None
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        if self._animation:
+            self._animation.stop()
+        self.setWindowOpacity(1.0)
+        # Morph toward the top edge and fade away, then hide the native window.
+        geometry = QPropertyAnimation(self, b"geometry")
+        geometry.setDuration(230)
+        geometry.setEasingCurve(QEasingCurve.Type.InBack)
+        geometry.setStartValue(self.geometry())
+        geometry.setEndValue(self._target_geometry(self.HIDDEN_SIZE))
+        opacity = QPropertyAnimation(self, b"windowOpacity")
+        opacity.setDuration(190)
+        opacity.setStartValue(1.0)
+        opacity.setEndValue(0.0)
+        group = QParallelAnimationGroup(self)
+        group.addAnimation(geometry)
+        group.addAnimation(opacity)
+        group.finished.connect(self.hide)
+        self._animation = group
+        group.start()
+        QTimer.singleShot(240, self.hide)
+
+    def reveal_idle_island(self):
+        if not self._auto_hidden:
+            return
+        self._auto_hidden = False
+        self._media_manually_hidden = False
+        self._hover_leave_at = None
+        self.setWindowOpacity(1.0)
+        self.show()
+        self.raise_()
+        self._animate_to(self._compact_size())
+
+    def _check_hot_zone(self):
+        if (self.is_expanded or self.worker.busy.is_set()
+                or (self._media and self._media.get("playing")
+                    and not self._media_manually_hidden)):
+            return
+        screen = self.screen() or QApplication.primaryScreen()
+        area = screen.availableGeometry()
+        cursor = QCursor.pos()
+        center = area.x() + area.width() // 2
+        in_hot_zone = (
+            center - self.HOT_ZONE_WIDTH // 2 <= cursor.x() <= center + self.HOT_ZONE_WIDTH // 2
+            and area.y() <= cursor.y() <= area.y() + self.HOT_ZONE_HEIGHT
+        )
+        if self._auto_hidden and in_hot_zone:
+            self.reveal_idle_island()
+        elif not self._auto_hidden:
+            if in_hot_zone or self.geometry().contains(cursor):
+                self._hover_leave_at = None
+            elif self._assistant_state == "Idle":
+                if self._hover_leave_at is None:
+                    self._hover_leave_at = time.monotonic()
+                elif time.monotonic() - self._hover_leave_at >= 1.0:
+                    if self._media and not self._media.get("playing"):
+                        self.hide_media_island()
+                    else:
+                        self.hide_idle_island()
+
+    def toggle_island(self):
+        if self.is_expanded:
+            self.collapse_island()
+        else:
+            self.expand_island(True)
+
+    def activate_island(self):
+        was_hidden = self.isHidden() or self.isMinimized()
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._collapse_timer.stop()
+        self._auto_hidden = False
+        self._media_manually_hidden = False
+        self.setWindowOpacity(1.0)
+        self.is_expanded = False
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        if was_hidden:
+            self.setGeometry(self._target_geometry(QSize(150, 34)))
+        self._animate_to(self._compact_size(), 390, QEasingCurve.Type.OutBack)
+
+    def activate_media_island(self):
+        """Show the compact live activity when playback becomes active."""
+        was_hidden = self.isHidden() or self._auto_hidden
+        self._collapse_timer.stop()
+        self._auto_hidden = False
+        self._media_manually_hidden = False
+        self.is_expanded = False
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.setWindowOpacity(1.0)
+        self.show()
+        self.raise_()
+        if was_hidden:
+            self.setGeometry(self._target_geometry(QSize(150, 34)))
+        self._animate_to(self._compact_size(), 390, QEasingCurve.Type.OutBack)
+
+    def _pulse_media_indicator(self):
+        if not self._media or not self._media.get("playing"):
+            return
+        self._pulse_phase = not self._pulse_phase
+        color = "#a9ecff" if self._pulse_phase else "#55d6ff"
+        size = 14 if self._pulse_phase else 12
+        self.status_dot.setStyleSheet(f"color: {color}; font-size: {size}px;")
+
+    def enterEvent(self, event):
+        self.reveal_idle_island()
+        self._hover_leave_at = None
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if not self.is_expanded and not self._media:
+            self._hover_leave_at = time.monotonic()
+        super().leaveEvent(event)
+
     def title_mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.oldPos = event.globalPosition().toPoint()
+            self._title_press_pos = event.globalPosition().toPoint()
 
-    def title_mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton:
-            delta = QPoint(event.globalPosition().toPoint() - self.oldPos)
-            self.move(self.x() + delta.x(), self.y() + delta.y())
-            self.oldPos = event.globalPosition().toPoint()
+    def title_mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and hasattr(self, "_title_press_pos"):
+            if (event.globalPosition().toPoint() - self._title_press_pos).manhattanLength() < 6:
+                self.toggle_island()
 
     def toggle_mic(self):
+        self.expand_island()
         if self.mic_btn.isChecked():
             self.status_label.setText("Mic ON - Listening")
             self.worker.enable_listening(True)
@@ -376,14 +841,81 @@ class JarvisWidget(QWidget):
             self.worker.enable_listening(False)
 
     def update_state(self, state, subtitle):
-        self.status_label.setText(subtitle[:70])
-        self.status_label.setToolTip(subtitle)
+        self._assistant_state = state
+        self._assistant_subtitle = subtitle
+        if not self._media:
+            self.name_label.setText("DEXGET")
+            self.status_label.setText(subtitle[:70])
+            self.status_label.setToolTip(subtitle)
+        colors = {
+            "Processing": "#4aa8ff", "Stopping": "#ffb347", "Idle": "#39e58c"
+        }
+        self.status_dot.setStyleSheet(f"color: {colors.get(state, '#39e58c')}; font-size: 15px;")
+        if state == "Processing":
+            self.expand_island()
         if state in ("Idle", "Stopping"):
             self.confirmation_panel.hide()
+        if state == "Idle":
+            self._collapse_timer.start(4500)
+
+    def update_media(self, media):
+        previous_key = self._last_media_key
+        was_playing = bool(self._media.get("playing"))
+        self._media = media or {}
+        playing_now = False
+        if self._media:
+            if not self._media_manually_hidden:
+                self._auto_hidden = False
+                self.setWindowOpacity(1.0)
+            title = self._media.get("title", "Now playing")
+            artist = self._media.get("artist") or self._media.get("app", "Media")
+            self._last_media_key = (title, artist)
+            self.name_label.setText(title[:34])
+            self.name_label.setToolTip(title)
+            self.status_label.setText(artist[:42])
+            self.status_label.setToolTip(artist)
+            playing = bool(self._media.get("playing"))
+            playing_now = playing
+            self.play_pause_btn.setText("❚❚" if playing else "▶")
+            artwork = self._media.get("artwork") or b""
+            pixmap = QPixmap()
+            if artwork and pixmap.loadFromData(artwork):
+                self.album_art.setPixmap(pixmap.scaled(
+                    self.album_art.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation))
+                self.album_art.setText("")
+            else:
+                self.album_art.setPixmap(QPixmap())
+                self.album_art.setText("♪")
+                self.album_art.setStyleSheet(
+                    "background: #202329; border-radius: 5px; color: #8f99a6; font-size: 18px;")
+            self.status_dot.setStyleSheet(
+                f"color: {'#55d6ff' if playing else '#ffb347'}; font-size: 15px;"
+            )
+            self._set_media_controls_visible(True)
+        else:
+            self._last_media_key = None
+            self.name_label.setText("DEXGET")
+            self.status_label.setText(self._assistant_subtitle[:70])
+            self.status_label.setToolTip(self._assistant_subtitle)
+            self._set_media_controls_visible(False)
+            if self._assistant_state == "Idle":
+                self._collapse_timer.start(1800)
+        if playing_now and not was_playing:
+            self.activate_media_island()
+        elif not playing_now and (was_playing or self._media):
+            self.hide_media_island()
+        elif not self.is_expanded and not self._media_manually_hidden:
+            if self._media and previous_key and previous_key != self._last_media_key:
+                self._animate_media_bump()
+            else:
+                self._animate_to(self._compact_size())
 
     def set_busy(self, busy):
         self.send_btn.setEnabled(not busy)
         self.stop_btn.setEnabled(busy)
+        if busy:
+            self.expand_island()
 
     def show_confirmation(self, prompt):
         if self.agent.registry.cancel_event.is_set():
@@ -391,6 +923,7 @@ class JarvisWidget(QWidget):
             return
         self.confirmation_label.setText(prompt)
         self.confirmation_panel.show()
+        self.expand_island()
         self.status_label.setText("Approval needed")
 
     def resolve_confirmation(self, approved):
@@ -400,6 +933,8 @@ class JarvisWidget(QWidget):
     def closeEvent(self, event):
         if self.worker.isRunning():
             self._closing = True
+            if hasattr(self, "media_worker"):
+                self.media_worker.shutdown()
             self.worker.shutdown()
             self.hide()
             event.ignore()
@@ -407,6 +942,8 @@ class JarvisWidget(QWidget):
             event.accept()
 
     def add_message(self, role, text):
+        if hasattr(self, "worker") and (self.worker.busy.is_set() or role == "User"):
+            self.expand_island()
         msg_widget = MessageWidget(role, text)
         self.chat_layout.addWidget(msg_widget)
         # Scroll to bottom
@@ -417,6 +954,25 @@ class JarvisWidget(QWidget):
         if text:
             if self.worker.submit_text(text):
                 self.input_field.clear()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._place_top_center)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # WA_TranslucentBackground plus the rounded container already clips the
+        # visible pixels. Rebuilding a native HRGN mask for every geometry
+        # animation frame causes a black flash/flicker on Windows DWM.
+        if not self.mask().isEmpty():
+            self.clearMask()
+
+    def _corner_radius(self):
+        if self.height() <= 6:
+            return 2.0
+        elif self.is_expanded:
+            return 24.0
+        return min(self.height() / 2.0, 26.0)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

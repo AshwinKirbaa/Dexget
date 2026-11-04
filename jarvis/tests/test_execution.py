@@ -1,8 +1,12 @@
 import pytest
 import os
+from unittest.mock import Mock
 from jarvis.router import route, RouteType
 from jarvis.command_normalizer import CommandNormalizer
 from jarvis.filesystem_executor import execute_filesystem_route
+from jarvis.agent.tool_registry import ToolRegistry
+from jarvis.tools.base import RiskLevel, Tool, ToolResult
+from jarvis.tasks.youtube import YouTubeMusicPlayTask
 
 def test_missing_parent_folder_creation():
     cmd = CommandNormalizer.normalize("create folder tester in folder_that_does_not_exist")
@@ -58,7 +62,40 @@ def test_existing_d_path_intact():
     assert res.tool_args["intent"] == "DRIVE_OPEN"
     assert "D:\\" in res.tool_args["location"]
 
-def test_system_workflow_reaches_agent():
+def test_system_workflow_uses_direct_power_tool():
     cmd = CommandNormalizer.normalize("switch to performance mode")
     res = route(cmd)
-    assert res.route_type == RouteType.AGENT
+    assert res.route_type == RouteType.WINDOWS
+    assert res.tool_name == "win_set_power_mode"
+
+def test_copy_between_folders(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    destination.mkdir()
+    (source / "note.txt").write_text("hello", encoding="utf-8")
+
+    cmd = f"copy note.txt from {source} to {destination}"
+    res = route(CommandNormalizer.normalize(cmd))
+    assert res.route_type == RouteType.FILESYSTEM
+    assert res.tool_args["destination"].casefold() == str(destination).casefold()
+
+    outcome = execute_filesystem_route(res.tool_args, {"current_directory": None}, None)
+    assert outcome["success"] is True
+    assert (destination / "note.txt").read_text(encoding="utf-8") == "hello"
+
+def test_youtube_music_prefers_installed_pwa():
+    registry = ToolRegistry()
+    direct = Mock(return_value=ToolResult(True, output="https://music.youtube.com/watch?v=test"))
+    registry.register(Tool(
+        "win_youtube_search", "test", {
+            "query": {"type": "str", "required": True},
+            "app": {"type": "str", "required": True},
+        }, RiskLevel.LOW, direct, "windows"
+    ))
+
+    result = YouTubeMusicPlayTask(registry).execute("purpose is glorious")
+
+    assert result.success
+    direct.assert_called_once_with(query="purpose is glorious", app="YouTube Music")
+    assert "installed YouTube Music app" in result.observation

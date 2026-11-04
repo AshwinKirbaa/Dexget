@@ -12,7 +12,10 @@ try:
 except ImportError:
     pass
 
-import pyaudio
+try:
+    import pyaudio
+except ImportError:
+    pyaudio = None
 
 try:
     import vosk
@@ -47,7 +50,7 @@ def resample_pcm(pcm_data, in_rate, out_rate=16000):
 
 class STTProvider:
     def __init__(self):
-        self.pyaudio_instance = pyaudio.PyAudio()
+        self.pyaudio_instance = None
         self.mic_stream = None
         self.capture_rate = 16000
         
@@ -56,6 +59,15 @@ class STTProvider:
         self.whisper_model = None
         self.is_ready = False
         self.init_error = None
+
+        if pyaudio is None:
+            self.init_error = (
+                "Microphone input is unavailable because PyAudio/PyAudioWPatch "
+                "is not installed for this Python architecture. Text input remains available."
+            )
+            return
+
+        self.pyaudio_instance = pyaudio.PyAudio()
         
         self.initialize_models()
 
@@ -245,4 +257,5 @@ class STTProvider:
 
     def close(self):
         self.close_microphone()
-        self.pyaudio_instance.terminate()
+        if self.pyaudio_instance:
+            self.pyaudio_instance.terminate()
