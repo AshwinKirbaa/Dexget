@@ -299,3 +299,40 @@ def test_charger_connection_shows_live_activity_and_restores_state():
         assert widget.worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_headset_connection_shows_live_activity_and_restores_state():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        assert widget._is_headset_name("Headphones (realme Buds T310)")
+        assert widget._is_headset_name("AirPods Pro")
+        assert not widget._is_headset_name("Laptop Speakers")
+
+        widget.show_headset_activity("Headphones (realme Buds T310)")
+        assert widget._headset_active
+        assert widget._compact_size() == widget.HEADSET_SIZE
+        assert widget.headset_name.text() == "realme Buds T310"
+        assert widget.headset_status.text() == "Connected"
+        assert not widget.earbuds_indicator.isHidden()
+        assert not widget.connection_ring.isHidden()
+        assert widget.identity_widget.isHidden()
+        assert widget.close_btn.isHidden()
+
+        widget.finish_headset_activity()
+        assert not widget._headset_active
+        assert widget.earbuds_indicator.isHidden()
+        assert widget.connection_ring.isHidden()
+        assert not widget.identity_widget.isHidden()
+        assert not widget.close_btn.isHidden()
+        assert widget.worker.isRunning()
+        assert widget.media_worker.isRunning()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()

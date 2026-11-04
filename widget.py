@@ -42,6 +42,36 @@ class BatteryIndicator(QWidget):
         painter.setBrush(QColor("#32d74b"))
         painter.drawRoundedRect(QRectF(4.0, 5.0, fill_width, 14.0), 3.5, 3.5)
 
+
+class EarbudsIndicator(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(48, 38)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#f5f7fa"), 4, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QRectF(5, 3, 13, 13))
+        painter.drawLine(14, 14, 16, 31)
+        painter.drawEllipse(QRectF(27, 3, 13, 13))
+        painter.drawLine(31, 14, 29, 31)
+
+
+class ConnectionRing(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(38, 38)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#30d158"), 4))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QRectF(4, 4, 30, 30))
+
 class JarvisWorker(QThread):
     state_changed = pyqtSignal(str, str) # state_name, subtitle
     message_received = pyqtSignal(str, str) # role, text
@@ -278,6 +308,7 @@ class JarvisWidget(QWidget):
     COLLAPSED_SIZE = QSize(300, 48)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
+    HEADSET_SIZE = QSize(390, 60)
     MEDIA_MIN_WIDTH = 400
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
@@ -301,6 +332,8 @@ class JarvisWidget(QWidget):
         self._charging_active = False
         self._pre_charging_expanded = False
         self._last_power_plugged = None
+        self._headset_active = False
+        self._last_audio_device_id = None
         self._collapse_timer = QTimer(self)
         self._collapse_timer.setSingleShot(True)
         self._collapse_timer.timeout.connect(self.collapse_island)
@@ -319,6 +352,13 @@ class JarvisWidget(QWidget):
         self._battery_timer.setInterval(1500)
         self._battery_timer.timeout.connect(self._check_battery_state)
         self._battery_timer.start()
+        self._headset_hide_timer = QTimer(self)
+        self._headset_hide_timer.setSingleShot(True)
+        self._headset_hide_timer.timeout.connect(self.finish_headset_activity)
+        self._audio_device_timer = QTimer(self)
+        self._audio_device_timer.setInterval(2000)
+        self._audio_device_timer.timeout.connect(self._check_audio_device)
+        self._audio_device_timer.start()
         self.initUI()
         # Copilot/startup presents only the compact island. The conversation
         # panel opens later when the user clicks the island.
@@ -419,6 +459,24 @@ class JarvisWidget(QWidget):
         self.charging_percent.hide()
         self.battery_indicator.hide()
 
+        self.earbuds_indicator = EarbudsIndicator()
+        self.headset_identity = QWidget()
+        headset_identity_layout = QVBoxLayout(self.headset_identity)
+        headset_identity_layout.setContentsMargins(0, 7, 0, 7)
+        headset_identity_layout.setSpacing(0)
+        self.headset_name = QLabel("Headset")
+        self.headset_name.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self.headset_name.setStyleSheet("color: white;")
+        self.headset_status = QLabel("Connected")
+        self.headset_status.setFont(QFont("Segoe UI", 9))
+        self.headset_status.setStyleSheet("color: #9da7b3;")
+        headset_identity_layout.addWidget(self.headset_name)
+        headset_identity_layout.addWidget(self.headset_status)
+        self.connection_ring = ConnectionRing()
+        self.earbuds_indicator.hide()
+        self.headset_identity.hide()
+        self.connection_ring.hide()
+
         self.expand_btn = QPushButton("⌄")
         self.expand_btn.setFixedSize(28, 28)
         self.expand_btn.setStyleSheet("""
@@ -461,6 +519,9 @@ class JarvisWidget(QWidget):
         title_layout.addStretch()
         title_layout.addWidget(self.charging_percent)
         title_layout.addWidget(self.battery_indicator)
+        title_layout.addWidget(self.earbuds_indicator)
+        title_layout.addWidget(self.headset_identity)
+        title_layout.addWidget(self.connection_ring)
         title_layout.addWidget(self.previous_btn)
         title_layout.addWidget(self.play_pause_btn)
         title_layout.addWidget(self.next_btn)
@@ -625,6 +686,8 @@ class JarvisWidget(QWidget):
         self.media_hide_btn.setVisible(visible)
 
     def _compact_size(self):
+        if self._headset_active:
+            return self.HEADSET_SIZE
         if self._charging_active:
             return self.CHARGING_SIZE
         if not self._media:
@@ -891,12 +954,35 @@ class JarvisWidget(QWidget):
             self._update_charging_percent(battery.percent)
         self._last_power_plugged = plugged
 
+    @staticmethod
+    def _is_headset_name(name):
+        lowered = (name or "").lower()
+        return any(word in lowered for word in (
+            "headphone", "headset", "earphone", "earbud", "buds", "airpods",
+        ))
+
+    def _check_audio_device(self):
+        try:
+            from pycaw.pycaw import AudioUtilities
+            device = AudioUtilities.GetSpeakers()
+            device_id = device.id if device else None
+            name = device.FriendlyName if device else ""
+        except Exception:
+            return
+        if (self._last_audio_device_id is not None
+                and device_id != self._last_audio_device_id
+                and self._is_headset_name(name)):
+            self.show_headset_activity(name)
+        self._last_audio_device_id = device_id
+
     def _update_charging_percent(self, percent):
         value = max(0, min(100, int(round(percent))))
         self.charging_percent.setText(f"{value}%")
         self.battery_indicator.set_percent(value)
 
     def show_charging_activity(self, percent):
+        if self._headset_active:
+            self.finish_headset_activity(restore=False)
         self._pre_charging_expanded = self.is_expanded
         self._charging_active = True
         self._collapse_timer.stop()
@@ -920,7 +1006,7 @@ class JarvisWidget(QWidget):
         self._animate_to(self.CHARGING_SIZE, 390, QEasingCurve.Type.OutBack)
         self._charging_hide_timer.start(4200)
 
-    def finish_charging_activity(self):
+    def finish_charging_activity(self, restore=True):
         if not self._charging_active:
             return
         self._charging_active = False
@@ -930,8 +1016,63 @@ class JarvisWidget(QWidget):
         self.status_dot.show()
         self.identity_widget.show()
         self.close_btn.show()
+        if not restore:
+            return
         if self._media:
             self._set_media_controls_visible(True)
+        if self._pre_charging_expanded:
+            self.expand_island()
+        elif self._media and self._media.get("playing"):
+            self.activate_media_island()
+        else:
+            self.hide_media_island()
+
+    def show_headset_activity(self, name):
+        if self._charging_active:
+            self._charging_hide_timer.stop()
+            self.finish_charging_activity(restore=False)
+        self._pre_charging_expanded = self.is_expanded
+        self._headset_active = True
+        self._collapse_timer.stop()
+        self._auto_hidden = False
+        self._media_manually_hidden = False
+        self.is_expanded = False
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.status_dot.hide()
+        self.album_art.hide()
+        self.identity_widget.hide()
+        self._set_media_controls_visible(False)
+        self.close_btn.hide()
+        self.earbuds_indicator.show()
+        self.headset_identity.show()
+        self.connection_ring.show()
+        display_name = (name or "Headset").strip()
+        for prefix in ("Headphones (", "Headset (", "Speakers ("):
+            if display_name.startswith(prefix) and display_name.endswith(")"):
+                display_name = display_name[len(prefix):-1]
+                break
+        self.headset_name.setText(display_name[:34] or "Headset")
+        self.setWindowOpacity(1.0)
+        self.show()
+        self.raise_()
+        self._animate_to(self.HEADSET_SIZE, 390, QEasingCurve.Type.OutBack)
+        self._headset_hide_timer.start(4200)
+
+    def finish_headset_activity(self, restore=True):
+        if not self._headset_active:
+            return
+        self._headset_active = False
+        self.earbuds_indicator.hide()
+        self.headset_identity.hide()
+        self.connection_ring.hide()
+        self.status_dot.show()
+        self.identity_widget.show()
+        self.close_btn.show()
+        if self._media:
+            self._set_media_controls_visible(True)
+        if not restore:
+            return
         if self._pre_charging_expanded:
             self.expand_island()
         elif self._media and self._media.get("playing"):
