@@ -267,3 +267,35 @@ def test_hover_revealed_paused_media_minimizes_after_pointer_leaves():
         assert widget.worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_charger_connection_shows_live_activity_and_restores_state():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.show_charging_activity(75)
+        assert widget._charging_active
+        assert widget._compact_size() == widget.CHARGING_SIZE
+        assert widget.charging_label.text() == "Charging"
+        assert widget.charging_percent.text() == "75%"
+        assert widget.battery_indicator.percent == 75
+        assert not widget.charging_label.isHidden()
+        assert widget.identity_widget.isHidden()
+        assert widget.close_btn.isHidden()
+
+        widget.finish_charging_activity()
+        assert not widget._charging_active
+        assert widget.charging_label.isHidden()
+        assert not widget.identity_widget.isHidden()
+        assert not widget.close_btn.isHidden()
+        assert widget.worker.isRunning()
+        assert widget.media_worker.isRunning()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()

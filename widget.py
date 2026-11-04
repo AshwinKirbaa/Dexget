@@ -9,11 +9,38 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QGraphicsOpacityEffect)
 from PyQt6.QtCore import (Qt, QPoint, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
-                          QSequentialAnimationGroup, QParallelAnimationGroup)
+                          QSequentialAnimationGroup, QParallelAnimationGroup,
+                          QRectF)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap)
 
 import jarvis_integration
+
+
+class BatteryIndicator(QWidget):
+    """Small Apple-style battery glyph used by the charging Live Activity."""
+    def __init__(self):
+        super().__init__()
+        self.percent = 0
+        self.setFixedSize(42, 24)
+
+    def set_percent(self, percent):
+        self.percent = max(0, min(100, int(percent)))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        outline = QRectF(1.5, 2.5, 35.0, 19.0)
+        painter.setPen(QPen(QColor("#8b929a"), 2))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(outline, 5, 5)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#8b929a"))
+        painter.drawRoundedRect(QRectF(37.5, 8.0, 3.5, 8.0), 1.5, 1.5)
+        fill_width = 30.0 * self.percent / 100.0
+        painter.setBrush(QColor("#32d74b"))
+        painter.drawRoundedRect(QRectF(4.0, 5.0, fill_width, 14.0), 3.5, 3.5)
 
 class JarvisWorker(QThread):
     state_changed = pyqtSignal(str, str) # state_name, subtitle
@@ -250,6 +277,7 @@ class JarvisWidget(QWidget):
     HIDDEN_SIZE = QSize(120, 4)
     COLLAPSED_SIZE = QSize(300, 48)
     MEDIA_SIZE = QSize(520, 60)
+    CHARGING_SIZE = QSize(360, 56)
     MEDIA_MIN_WIDTH = 400
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
@@ -270,6 +298,9 @@ class JarvisWidget(QWidget):
         self._assistant_subtitle = "Ready"
         self._last_media_key = None
         self._pulse_phase = False
+        self._charging_active = False
+        self._pre_charging_expanded = False
+        self._last_power_plugged = None
         self._collapse_timer = QTimer(self)
         self._collapse_timer.setSingleShot(True)
         self._collapse_timer.timeout.connect(self.collapse_island)
@@ -281,6 +312,13 @@ class JarvisWidget(QWidget):
         self._media_pulse_timer.setInterval(520)
         self._media_pulse_timer.timeout.connect(self._pulse_media_indicator)
         self._media_pulse_timer.start()
+        self._charging_hide_timer = QTimer(self)
+        self._charging_hide_timer.setSingleShot(True)
+        self._charging_hide_timer.timeout.connect(self.finish_charging_activity)
+        self._battery_timer = QTimer(self)
+        self._battery_timer.setInterval(1500)
+        self._battery_timer.timeout.connect(self._check_battery_state)
+        self._battery_timer.start()
         self.initUI()
         # Copilot/startup presents only the compact island. The conversation
         # panel opens later when the user clicks the island.
@@ -353,7 +391,8 @@ class JarvisWidget(QWidget):
         self.album_art.setStyleSheet("background: #202329; border-radius: 5px;")
         self.album_art.hide()
 
-        identity_layout = QVBoxLayout()
+        self.identity_widget = QWidget()
+        identity_layout = QVBoxLayout(self.identity_widget)
         identity_layout.setContentsMargins(0, 7, 0, 7)
         identity_layout.setSpacing(0)
         self.name_label = QLabel("DEXGET")
@@ -368,6 +407,17 @@ class JarvisWidget(QWidget):
         self.status_label.setStyleSheet("color: #9da7b3;")
         identity_layout.addWidget(self.name_label)
         identity_layout.addWidget(self.status_label)
+
+        self.charging_label = QLabel("Charging")
+        self.charging_label.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
+        self.charging_label.setStyleSheet("color: white;")
+        self.charging_percent = QLabel("0%")
+        self.charging_percent.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
+        self.charging_percent.setStyleSheet("color: #32d74b;")
+        self.battery_indicator = BatteryIndicator()
+        self.charging_label.hide()
+        self.charging_percent.hide()
+        self.battery_indicator.hide()
 
         self.expand_btn = QPushButton("⌄")
         self.expand_btn.setFixedSize(28, 28)
@@ -387,9 +437,9 @@ class JarvisWidget(QWidget):
         self.next_btn.clicked.connect(lambda: self.media_worker.control("next"))
         self.media_hide_btn.clicked.connect(self.hide_media_island)
         
-        close_btn = QPushButton("✕")
-        close_btn.setFixedSize(24, 24)
-        close_btn.setStyleSheet("""
+        self.close_btn = QPushButton("✕")
+        self.close_btn.setFixedSize(24, 24)
+        self.close_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
                 border: none;
@@ -400,18 +450,22 @@ class JarvisWidget(QWidget):
                 color: #ff4444;
             }
         """)
-        close_btn.clicked.connect(QApplication.quit)
+        self.close_btn.clicked.connect(QApplication.quit)
         
         title_layout.addWidget(self.status_dot)
         title_layout.addWidget(self.album_art)
         # The metadata block owns the remaining width. A separate stretch here
         # collapses this layout to zero because its labels use Ignored sizing.
-        title_layout.addLayout(identity_layout, 1)
+        title_layout.addWidget(self.identity_widget, 1)
+        title_layout.addWidget(self.charging_label)
+        title_layout.addStretch()
+        title_layout.addWidget(self.charging_percent)
+        title_layout.addWidget(self.battery_indicator)
         title_layout.addWidget(self.previous_btn)
         title_layout.addWidget(self.play_pause_btn)
         title_layout.addWidget(self.next_btn)
         title_layout.addWidget(self.media_hide_btn)
-        title_layout.addWidget(close_btn)
+        title_layout.addWidget(self.close_btn)
         self._set_media_controls_visible(False)
         
         # Event filters for dragging
@@ -571,6 +625,8 @@ class JarvisWidget(QWidget):
         self.media_hide_btn.setVisible(visible)
 
     def _compact_size(self):
+        if self._charging_active:
+            return self.CHARGING_SIZE
         if not self._media:
             return self.COLLAPSED_SIZE
         title = self._media.get("title", "Now playing")
@@ -819,6 +875,69 @@ class JarvisWidget(QWidget):
         color = "#a9ecff" if self._pulse_phase else "#55d6ff"
         size = 14 if self._pulse_phase else 12
         self.status_dot.setStyleSheet(f"color: {color}; font-size: {size}px;")
+
+    def _check_battery_state(self):
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+        except Exception:
+            battery = None
+        if battery is None:
+            return
+        plugged = bool(battery.power_plugged)
+        if self._last_power_plugged is False and plugged:
+            self.show_charging_activity(battery.percent)
+        elif self._charging_active and plugged:
+            self._update_charging_percent(battery.percent)
+        self._last_power_plugged = plugged
+
+    def _update_charging_percent(self, percent):
+        value = max(0, min(100, int(round(percent))))
+        self.charging_percent.setText(f"{value}%")
+        self.battery_indicator.set_percent(value)
+
+    def show_charging_activity(self, percent):
+        self._pre_charging_expanded = self.is_expanded
+        self._charging_active = True
+        self._collapse_timer.stop()
+        self._auto_hidden = False
+        self._media_manually_hidden = False
+        self.is_expanded = False
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.status_dot.hide()
+        self.album_art.hide()
+        self.identity_widget.hide()
+        self._set_media_controls_visible(False)
+        self.close_btn.hide()
+        self.charging_label.show()
+        self.charging_percent.show()
+        self.battery_indicator.show()
+        self._update_charging_percent(percent)
+        self.setWindowOpacity(1.0)
+        self.show()
+        self.raise_()
+        self._animate_to(self.CHARGING_SIZE, 390, QEasingCurve.Type.OutBack)
+        self._charging_hide_timer.start(4200)
+
+    def finish_charging_activity(self):
+        if not self._charging_active:
+            return
+        self._charging_active = False
+        self.charging_label.hide()
+        self.charging_percent.hide()
+        self.battery_indicator.hide()
+        self.status_dot.show()
+        self.identity_widget.show()
+        self.close_btn.show()
+        if self._media:
+            self._set_media_controls_visible(True)
+        if self._pre_charging_expanded:
+            self.expand_island()
+        elif self._media and self._media.get("playing"):
+            self.activate_media_island()
+        else:
+            self.hide_media_island()
 
     def enterEvent(self, event):
         self.reveal_idle_island()
