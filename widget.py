@@ -326,6 +326,7 @@ class JarvisWidget(QWidget):
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)
     HEADSET_SIZE = QSize(350, 56)
+    NOTIFICATION_SIZE = QSize(430, 60)
     MEDIA_MIN_WIDTH = 400
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
@@ -351,6 +352,9 @@ class JarvisWidget(QWidget):
         self._last_power_plugged = None
         self._low_power_active = False
         self._last_energy_saver = None
+        self._notification_active = False
+        self._notification_listener = None
+        self._known_notification_ids = set()
         self._headset_active = False
         self._last_audio_device_id = None
         self._collapse_timer = QTimer(self)
@@ -381,6 +385,12 @@ class JarvisWidget(QWidget):
         self._audio_device_timer.setInterval(2000)
         self._audio_device_timer.timeout.connect(self._check_audio_device)
         self._audio_device_timer.start()
+        self._notification_hide_timer = QTimer(self)
+        self._notification_hide_timer.setSingleShot(True)
+        self._notification_hide_timer.timeout.connect(self.finish_notification_activity)
+        self._notification_timer = QTimer(self)
+        self._notification_timer.setInterval(1200)
+        self._notification_timer.timeout.connect(self._poll_notifications)
         self.initUI()
         # Copilot/startup presents only the compact island. The conversation
         # panel opens later when the user clicks the island.
@@ -408,6 +418,7 @@ class JarvisWidget(QWidget):
                              "; ".join(f"{name}: {error}" for name, error in self.agent.registry.unavailable.items()))
         QTimer.singleShot(0, self._place_top_center)
         QTimer.singleShot(3500, self.collapse_island)
+        QTimer.singleShot(5000, self._start_notification_listener)
 
     def initUI(self):
         # Frameless window and Tool flag so it doesn't show in the taskbar
@@ -493,6 +504,29 @@ class JarvisWidget(QWidget):
         self.low_power_percent.hide()
         self.low_power_battery.hide()
 
+        self.notification_icon = QLabel("N")
+        self.notification_icon.setFixedSize(34, 34)
+        self.notification_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.notification_icon.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        self.notification_icon.setStyleSheet(
+            "background: #3478f6; color: white; border-radius: 17px;")
+        self.notification_identity = QWidget()
+        notification_layout = QVBoxLayout(self.notification_identity)
+        notification_layout.setContentsMargins(0, 5, 0, 5)
+        notification_layout.setSpacing(0)
+        self.notification_title = QLabel("Notification")
+        self.notification_title.setMaximumWidth(290)
+        self.notification_title.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self.notification_title.setStyleSheet("color: white;")
+        self.notification_body = QLabel("")
+        self.notification_body.setMaximumWidth(290)
+        self.notification_body.setFont(QFont("Segoe UI", 9))
+        self.notification_body.setStyleSheet("color: #aeb5bf;")
+        notification_layout.addWidget(self.notification_title)
+        notification_layout.addWidget(self.notification_body)
+        self.notification_icon.hide()
+        self.notification_identity.hide()
+
         self.earbuds_indicator = EarbudsIndicator()
         self.headset_identity = QWidget()
         headset_identity_layout = QVBoxLayout(self.headset_identity)
@@ -552,6 +586,8 @@ class JarvisWidget(QWidget):
         title_layout.addWidget(self.identity_widget, 1)
         title_layout.addWidget(self.charging_label)
         title_layout.addWidget(self.low_power_label)
+        title_layout.addWidget(self.notification_icon)
+        title_layout.addWidget(self.notification_identity)
         title_layout.addWidget(self.earbuds_indicator)
         title_layout.addWidget(self.headset_identity)
         title_layout.addStretch()
@@ -724,6 +760,8 @@ class JarvisWidget(QWidget):
         self.media_hide_btn.setVisible(visible)
 
     def _compact_size(self):
+        if self._notification_active:
+            return self.NOTIFICATION_SIZE
         if self._headset_active:
             return self.HEADSET_SIZE
         if self._low_power_active:
@@ -1044,12 +1082,80 @@ class JarvisWidget(QWidget):
             self.show_headset_activity(name)
         self._last_audio_device_id = device_id
 
+    def _start_notification_listener(self):
+        try:
+            asyncio.run(self._initialize_notification_listener())
+        except Exception:
+            self._notification_listener = None
+
+    async def _initialize_notification_listener(self):
+        from winrt.windows.ui.notifications import NotificationKinds
+        from winrt.windows.ui.notifications.management import (
+            UserNotificationListener,
+            UserNotificationListenerAccessStatus,
+        )
+        listener = UserNotificationListener.current
+        access = listener.get_access_status()
+        if access == UserNotificationListenerAccessStatus.UNSPECIFIED:
+            access = await listener.request_access_async()
+        if access != UserNotificationListenerAccessStatus.ALLOWED:
+            return
+        current = await listener.get_notifications_async(NotificationKinds.TOAST)
+        self._known_notification_ids = {item.id for item in current}
+        self._notification_listener = listener
+        self._notification_timer.start()
+
+    def _poll_notifications(self):
+        if self._notification_listener is None:
+            return
+        try:
+            asyncio.run(self._read_new_notifications())
+        except Exception:
+            return
+
+    async def _read_new_notifications(self):
+        from winrt.windows.ui.notifications import NotificationKinds
+        items = await self._notification_listener.get_notifications_async(
+            NotificationKinds.TOAST)
+        current_ids = {item.id for item in items}
+        new_items = [item for item in items
+                     if item.id not in self._known_notification_ids]
+        self._known_notification_ids = current_ids
+        if not new_items:
+            return
+        item = new_items[-1]
+        app_name, title, body = self._notification_text(item)
+        if app_name.lower() not in ("jarvis", "dexget"):
+            self.show_notification_activity(app_name, title, body)
+
+    @staticmethod
+    def _notification_text(item):
+        try:
+            app_name = item.app_info.display_info.display_name
+        except Exception:
+            app_name = "Windows"
+        texts = []
+        try:
+            from winrt.windows.ui.notifications import KnownNotificationBindings
+            binding = item.notification.visual.get_binding(
+                KnownNotificationBindings.toast_generic)
+            if binding:
+                texts = [element.text.strip() for element in binding.get_text_elements()
+                         if element.text and element.text.strip()]
+        except Exception:
+            pass
+        title = texts[0] if texts else "New notification"
+        body = " · ".join(texts[1:]) if len(texts) > 1 else app_name
+        return app_name or "Windows", title, body
+
     def _update_charging_percent(self, percent):
         value = max(0, min(100, int(round(percent))))
         self.charging_percent.setText(f"{value}%")
         self.battery_indicator.set_percent(value)
 
     def show_charging_activity(self, percent):
+        if self._notification_active:
+            self.finish_notification_activity(restore=False)
         if self._low_power_active:
             self.finish_low_power_activity(restore=False)
         if self._headset_active:
@@ -1099,6 +1205,8 @@ class JarvisWidget(QWidget):
             self.hide_media_island()
 
     def show_headset_activity(self, name):
+        if self._notification_active:
+            self.finish_notification_activity(restore=False)
         if self._low_power_active:
             self.finish_low_power_activity(restore=False)
         if self._charging_active:
@@ -1159,6 +1267,8 @@ class JarvisWidget(QWidget):
         self.low_power_battery.set_percent(value)
 
     def show_low_power_activity(self, percent):
+        if self._notification_active:
+            self.finish_notification_activity(restore=False)
         if self._charging_active:
             self._charging_hide_timer.stop()
             self.finish_charging_activity(restore=False)
@@ -1194,6 +1304,61 @@ class JarvisWidget(QWidget):
         self.low_power_label.hide()
         self.low_power_percent.hide()
         self.low_power_battery.hide()
+        self.status_dot.show()
+        self.identity_widget.show()
+        self.close_btn.show()
+        if self._media:
+            self._set_media_controls_visible(True)
+        if not restore:
+            return
+        if self._pre_charging_expanded:
+            self.expand_island()
+        elif self._media and self._media.get("playing"):
+            self.activate_media_island()
+        else:
+            self.hide_media_island()
+
+    def show_notification_activity(self, app_name, title, body):
+        if self._charging_active:
+            self._charging_hide_timer.stop()
+            self.finish_charging_activity(restore=False)
+        if self._headset_active:
+            self._headset_hide_timer.stop()
+            self.finish_headset_activity(restore=False)
+        if self._low_power_active:
+            self._low_power_hide_timer.stop()
+            self.finish_low_power_activity(restore=False)
+        self._pre_charging_expanded = self.is_expanded
+        self._notification_active = True
+        self._collapse_timer.stop()
+        self._auto_hidden = False
+        self.is_expanded = False
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.status_dot.hide()
+        self.album_art.hide()
+        self.identity_widget.hide()
+        self._set_media_controls_visible(False)
+        self.close_btn.hide()
+        app_name = (app_name or "Windows").strip()
+        self.notification_icon.setText((app_name[:1] or "N").upper())
+        self.notification_title.setText((title or "New notification")[:52])
+        subtitle = f"{app_name} · {body}" if body and body != app_name else app_name
+        self.notification_body.setText(subtitle[:78])
+        self.notification_icon.show()
+        self.notification_identity.show()
+        self.setWindowOpacity(1.0)
+        self.show()
+        self.raise_()
+        self._animate_to(self.NOTIFICATION_SIZE, 390, QEasingCurve.Type.OutBack)
+        self._notification_hide_timer.start(5200)
+
+    def finish_notification_activity(self, restore=True):
+        if not self._notification_active:
+            return
+        self._notification_active = False
+        self.notification_icon.hide()
+        self.notification_identity.hide()
         self.status_dot.show()
         self.identity_widget.show()
         self.close_btn.show()

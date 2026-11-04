@@ -367,3 +367,33 @@ def test_energy_saver_shows_low_power_activity_and_restores_state():
         assert widget.worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_notification_live_activity_shows_content_and_restores_state():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.show_notification_activity("WhatsApp", "New message", "Ashwin: Hello")
+        assert widget._notification_active
+        assert widget._compact_size() == widget.NOTIFICATION_SIZE
+        assert widget.notification_icon.text() == "W"
+        assert widget.notification_title.text() == "New message"
+        assert widget.notification_body.text() == "WhatsApp · Ashwin: Hello"
+        assert not widget.notification_identity.isHidden()
+        assert widget.identity_widget.isHidden()
+
+        widget.finish_notification_activity()
+        assert not widget._notification_active
+        assert widget.notification_identity.isHidden()
+        assert not widget.identity_widget.isHidden()
+        assert widget.worker.isRunning()
+        assert widget.media_worker.isRunning()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()

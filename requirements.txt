@@ -2,8 +2,11 @@ PyQt6
 winrt-runtime; sys_platform == "win32"
 winrt-Windows.Foundation; sys_platform == "win32"
 winrt-Windows.Foundation.Collections; sys_platform == "win32"
+winrt-Windows.ApplicationModel; sys_platform == "win32"
 winrt-Windows.Storage.Streams; sys_platform == "win32"
 winrt-Windows.Media.Control; sys_platform == "win32"
+winrt-Windows.UI.Notifications; sys_platform == "win32"
+winrt-Windows.UI.Notifications.Management; sys_platform == "win32"
 # PyAudioWPatch does not publish Windows ARM64 wheels. Voice input is optional;
 # text input and all system/file controls continue to work without it.
 pyaudiowpatch; platform_machine != "ARM64" and platform_machine != "arm64"
