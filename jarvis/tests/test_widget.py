@@ -382,6 +382,8 @@ def test_notification_live_activity_shows_content_and_restores_state():
         assert widget.notification_title.text() == "New message"
         assert widget.notification_body.text() == "“Ashwin: Hello”  · now"
         assert widget.title_bar.height() == widget.NOTIFICATION_SIZE.height()
+        assert "rgba(12, 14, 18, 244)" in widget.container.styleSheet()
+        assert "color: white" in widget.notification_title.styleSheet()
         assert not widget.notification_identity.isHidden()
         assert widget.identity_widget.isHidden()
 

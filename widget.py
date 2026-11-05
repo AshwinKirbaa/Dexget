@@ -549,7 +549,7 @@ class JarvisWidget(QWidget):
         self.notification_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.notification_icon.setFont(QFont("Segoe UI Symbol", 13, QFont.Weight.DemiBold))
         self.notification_icon.setStyleSheet(
-            "background: transparent; color: #626975;")
+            "background: transparent; color: #aeb5bf;")
         self.notification_identity = QWidget()
         notification_layout = QVBoxLayout(self.notification_identity)
         notification_layout.setContentsMargins(0, 5, 0, 5)
@@ -557,11 +557,11 @@ class JarvisWidget(QWidget):
         self.notification_title = QLabel("Notification")
         self.notification_title.setMaximumWidth(290)
         self.notification_title.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
-        self.notification_title.setStyleSheet("color: #171a20;")
+        self.notification_title.setStyleSheet("color: white;")
         self.notification_body = QLabel("")
         self.notification_body.setMaximumWidth(290)
         self.notification_body.setFont(QFont("Segoe UI", 9))
-        self.notification_body.setStyleSheet("color: #464c56;")
+        self.notification_body.setStyleSheet("color: #aeb5bf;")
         notification_layout.addWidget(self.notification_title)
         notification_layout.addWidget(self.notification_body)
         self.notification_icon.hide()
@@ -805,9 +805,9 @@ class JarvisWidget(QWidget):
     def _apply_notification_container_style(self):
         self.container.setStyleSheet("""
             #Container {
-                background-color: rgba(229, 233, 241, 238);
-                border-radius: 18px;
-                border: 1px solid rgba(255, 255, 255, 205);
+                background-color: rgba(12, 14, 18, 244);
+                border-radius: 28px;
+                border: 1px solid rgba(255, 255, 255, 48);
             }
         """)
 
