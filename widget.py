@@ -362,7 +362,7 @@ class JarvisWidget(QWidget):
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)
     HEADSET_SIZE = QSize(350, 56)
-    NOTIFICATION_SIZE = QSize(430, 60)
+    NOTIFICATION_SIZE = QSize(370, 64)
     MEDIA_MIN_WIDTH = 400
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
@@ -480,13 +480,7 @@ class JarvisWidget(QWidget):
         # --- Main Container with Glassmorphism ---
         self.container = QFrame()
         self.container.setObjectName("Container")
-        self.container.setStyleSheet("""
-            #Container {
-                background-color: rgba(12, 14, 18, 244);
-                border-radius: 28px;
-                border: 1px solid rgba(255, 255, 255, 48);
-            }
-        """)
+        self._apply_default_container_style()
         # Avoid QGraphicsDropShadowEffect here. On a translucent top-level
         # Windows window it re-rasterizes the entire surface on every resize
         # frame and produces visible flashes during pill-to-panel expansion.
@@ -550,24 +544,24 @@ class JarvisWidget(QWidget):
         self.low_power_percent.hide()
         self.low_power_battery.hide()
 
-        self.notification_icon = QLabel("N")
-        self.notification_icon.setFixedSize(34, 34)
+        self.notification_icon = QLabel("✉")
+        self.notification_icon.setFixedSize(26, 26)
         self.notification_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.notification_icon.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        self.notification_icon.setFont(QFont("Segoe UI Symbol", 13, QFont.Weight.DemiBold))
         self.notification_icon.setStyleSheet(
-            "background: #3478f6; color: white; border-radius: 17px;")
+            "background: transparent; color: #626975;")
         self.notification_identity = QWidget()
         notification_layout = QVBoxLayout(self.notification_identity)
         notification_layout.setContentsMargins(0, 5, 0, 5)
         notification_layout.setSpacing(0)
         self.notification_title = QLabel("Notification")
         self.notification_title.setMaximumWidth(290)
-        self.notification_title.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
-        self.notification_title.setStyleSheet("color: white;")
+        self.notification_title.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        self.notification_title.setStyleSheet("color: #171a20;")
         self.notification_body = QLabel("")
         self.notification_body.setMaximumWidth(290)
         self.notification_body.setFont(QFont("Segoe UI", 9))
-        self.notification_body.setStyleSheet("color: #aeb5bf;")
+        self.notification_body.setStyleSheet("color: #464c56;")
         notification_layout.addWidget(self.notification_title)
         notification_layout.addWidget(self.notification_body)
         self.notification_icon.hide()
@@ -644,11 +638,11 @@ class JarvisWidget(QWidget):
         title_layout.addWidget(self.identity_widget, 1)
         title_layout.addWidget(self.charging_label)
         title_layout.addWidget(self.low_power_label)
-        title_layout.addWidget(self.notification_icon)
         title_layout.addWidget(self.notification_identity)
         title_layout.addWidget(self.earbuds_indicator)
         title_layout.addWidget(self.headset_identity)
         title_layout.addStretch()
+        title_layout.addWidget(self.notification_icon)
         title_layout.addWidget(self.charging_percent)
         title_layout.addWidget(self.battery_indicator)
         title_layout.addWidget(self.low_power_percent)
@@ -798,6 +792,24 @@ class JarvisWidget(QWidget):
         x = area.x() + (area.width() - size.width()) // 2
         y = area.y() if size == self.HIDDEN_SIZE else area.y() + self.TOP_MARGIN
         return QRect(x, y, size.width(), size.height())
+
+    def _apply_default_container_style(self):
+        self.container.setStyleSheet("""
+            #Container {
+                background-color: rgba(12, 14, 18, 244);
+                border-radius: 28px;
+                border: 1px solid rgba(255, 255, 255, 48);
+            }
+        """)
+
+    def _apply_notification_container_style(self):
+        self.container.setStyleSheet("""
+            #Container {
+                background-color: rgba(229, 233, 241, 238);
+                border-radius: 18px;
+                border: 1px solid rgba(255, 255, 255, 205);
+            }
+        """)
 
     def _media_button(self, text, primary=False):
         button = QPushButton(text)
@@ -1496,10 +1508,12 @@ class JarvisWidget(QWidget):
         self.close_btn.hide()
         self.screen_assist_btn.hide()
         app_name = (app_name or "Windows").strip()
-        self.notification_icon.setText((app_name[:1] or "N").upper())
+        self.notification_icon.setText("✉")
         self.notification_title.setText((title or "New notification")[:52])
-        subtitle = f"{app_name} · {body}" if body and body != app_name else app_name
-        self.notification_body.setText(subtitle[:78])
+        message = body if body and body != app_name else app_name
+        self.notification_body.setText(f'“{message[:62]}”  · now')
+        self._apply_notification_container_style()
+        self.title_bar.setFixedHeight(self.NOTIFICATION_SIZE.height())
         self.notification_icon.show()
         self.notification_identity.show()
         self._present_compact(self.NOTIFICATION_SIZE, 340)
@@ -1511,6 +1525,8 @@ class JarvisWidget(QWidget):
         self._notification_active = False
         self.notification_icon.hide()
         self.notification_identity.hide()
+        self._apply_default_container_style()
+        self.title_bar.setFixedHeight(48)
         self.status_dot.show()
         self.identity_widget.show()
         self.close_btn.show()
