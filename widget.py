@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                              QFrame, QSizePolicy, QGraphicsDropShadowEffect,
                              QGraphicsOpacityEffect)
-from PyQt6.QtCore import (Qt, QPoint, QThread, pyqtSignal, QTimer, QSize,
+from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QSequentialAnimationGroup, QParallelAnimationGroup,
                           QRectF, QAbstractAnimation)
@@ -375,6 +375,7 @@ class JarvisWidget(QWidget):
         self.is_expanded = False
         self._animation = None
         self._animation_target = None
+        self._transition_generation = 0
         self._visibility_generation = 0
         self._is_hiding = False
         self._hot_zone_armed = True
@@ -862,23 +863,33 @@ class JarvisWidget(QWidget):
         size = self._expanded_size() if self.is_expanded else self._compact_size()
         self.setGeometry(self._target_geometry(size))
 
-    def _animate_to(self, size, duration=320, curve=QEasingCurve.Type.OutQuint):
+    @staticmethod
+    def _fluid_curve():
+        """A fast, soft-settling curve without geometry overshoot."""
+        curve = QEasingCurve(QEasingCurve.Type.BezierSpline)
+        curve.addCubicBezierSegment(
+            QPointF(0.22, 1.0), QPointF(0.36, 1.0), QPointF(1.0, 1.0))
+        return curve
+
+    def _animate_to(self, size, duration=360, curve=None):
         target = self._target_geometry(size)
         if (self._animation and self._animation_target == target
                 and self._animation.state() == QAbstractAnimation.State.Running):
-            return
+            return self._transition_generation
         if self.geometry() == target:
             self._animation_target = target
-            return
+            return self._transition_generation
         if self._animation:
             self._animation.stop()
+        self._transition_generation += 1
         self._animation = QPropertyAnimation(self, b"geometry", self)
         self._animation_target = target
         self._animation.setDuration(duration)
-        self._animation.setEasingCurve(curve)
+        self._animation.setEasingCurve(curve or self._fluid_curve())
         self._animation.setStartValue(self.geometry())
         self._animation.setEndValue(target)
         self._animation.start()
+        return self._transition_generation
 
     def _present_compact(self, size, duration=330):
         """Reveal at a deterministic geometry, then perform one fluid resize."""
@@ -897,7 +908,7 @@ class JarvisWidget(QWidget):
             self.setGeometry(self._target_geometry(start))
         self.show()
         self.raise_()
-        self._animate_to(size, duration, QEasingCurve.Type.OutCubic)
+        self._animate_to(size, duration, self._fluid_curve())
 
     def _animate_media_bump(self):
         """A subtle live-activity breathe when the playing item changes."""
@@ -964,13 +975,24 @@ class JarvisWidget(QWidget):
         self.expand_btn.setText("⌃")
         # Expand directly from the already content-sized media pill. Using a
         # fixed width here caused a second horizontal resize and visible flash.
-        self._animate_to(self._expanded_size(), 400, QEasingCurve.Type.OutQuint)
+        generation = self._animate_to(
+            self._expanded_size(), 420, self._fluid_curve())
         # Let the black island surface establish first; adding the complex
         # scroll/input layout at the same instant as the native resize causes
         # a one-frame flash on DWM layered windows.
-        QTimer.singleShot(145, self._show_expanded_content)
+        QTimer.singleShot(
+            150,
+            lambda: self._show_expanded_content()
+            if (self.is_expanded and generation == self._transition_generation)
+            else None,
+        )
         if focus_input:
-            QTimer.singleShot(230, self.input_field.setFocus)
+            QTimer.singleShot(
+                235,
+                lambda: self.input_field.setFocus()
+                if (self.is_expanded and generation == self._transition_generation)
+                else None,
+            )
 
     def collapse_island(self):
         if not hasattr(self, "worker") or self.worker.busy.is_set() or not self.confirmation_panel.isHidden():
@@ -984,7 +1006,7 @@ class JarvisWidget(QWidget):
         self.scroll_area.hide()
         self.input_frame.hide()
         self.expand_btn.setText("⌄")
-        self._animate_to(self._compact_size(), 330, QEasingCurve.Type.InOutCubic)
+        self._animate_to(self._compact_size(), 360, self._fluid_curve())
 
     def hide_idle_island(self):
         if (self.worker.busy.is_set()
@@ -998,7 +1020,7 @@ class JarvisWidget(QWidget):
         self.input_frame.hide()
         self.expand_btn.setText("⌄")
         self.setWindowOpacity(0.03)
-        self._animate_to(self.HIDDEN_SIZE, 240, QEasingCurve.Type.InBack)
+        self._animate_to(self.HIDDEN_SIZE, 300, self._fluid_curve())
 
     def hide_media_island(self):
         """Hide the UI without stopping either background worker."""
@@ -1022,8 +1044,8 @@ class JarvisWidget(QWidget):
         # opacity in parallel with geometry makes Windows recompose the layered
         # surface twice per frame and causes flashes on some GPUs.
         geometry = QPropertyAnimation(self, b"geometry", self)
-        geometry.setDuration(220)
-        geometry.setEasingCurve(QEasingCurve.Type.InBack)
+        geometry.setDuration(300)
+        geometry.setEasingCurve(self._fluid_curve())
         geometry.setStartValue(self.geometry())
         geometry.setEndValue(self._target_geometry(self.HIDDEN_SIZE))
         geometry.finished.connect(self._complete_media_hide)
@@ -1643,10 +1665,9 @@ class JarvisWidget(QWidget):
                                and not self._media_manually_hidden))):
             self.hide_media_island()
         elif not self.is_expanded and not self._media_manually_hidden:
-            if self._media and previous_key and previous_key != self._last_media_key:
-                self._animate_media_bump()
-            else:
-                self._animate_to(self._compact_size())
+            # Track changes resize once to the final content-aware width.
+            # The old grow-then-settle bump caused a visible double resize.
+            self._animate_to(self._compact_size())
 
     def set_busy(self, busy):
         self.send_btn.setEnabled(not busy)

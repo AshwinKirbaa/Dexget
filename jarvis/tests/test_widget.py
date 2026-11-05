@@ -423,6 +423,28 @@ def test_duplicate_resize_requests_do_not_restart_running_animation():
         app.processEvents()
 
 
+def test_interrupted_expand_does_not_reveal_stale_content():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.expand_island()
+        first_generation = widget._transition_generation
+        widget.collapse_island()
+        assert widget._transition_generation > first_generation
+        widget._show_expanded_content()
+        assert widget.scroll_area.isHidden()
+        assert widget.input_frame.isHidden()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_screen_assist_submits_visible_text_and_blocks_proctoring():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:
