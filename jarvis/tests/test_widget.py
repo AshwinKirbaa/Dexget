@@ -86,6 +86,10 @@ def test_dynamic_island_reacts_to_media_metadata():
         widget.hide_media_island()
         assert widget._media_manually_hidden
         assert widget._auto_hidden
+        minimize_target = widget._animation.endValue()
+        area = widget.screen().availableGeometry()
+        assert minimize_target.size() == widget.MINIMIZE_SIZE
+        assert minimize_target.y() + minimize_target.height() <= area.y()
         deadline = time.monotonic() + 1
         while not widget.isHidden() and time.monotonic() < deadline:
             app.processEvents()

@@ -357,6 +357,7 @@ class MessageWidget(QWidget):
 
 class JarvisWidget(QWidget):
     HIDDEN_SIZE = QSize(120, 4)
+    MINIMIZE_SIZE = QSize(120, 32)
     COLLAPSED_SIZE = QSize(300, 48)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
@@ -1014,20 +1015,28 @@ class JarvisWidget(QWidget):
         # Morph toward the top edge, then hide once. Animating native window
         # opacity in parallel with geometry makes Windows recompose the layered
         # surface twice per frame and causes flashes on some GPUs.
+        screen = self.screen() or QApplication.primaryScreen()
+        area = screen.availableGeometry()
+        minimize_target = QRect(
+            area.x() + (area.width() - self.MINIMIZE_SIZE.width()) // 2,
+            area.y() - self.MINIMIZE_SIZE.height(),
+            self.MINIMIZE_SIZE.width(),
+            self.MINIMIZE_SIZE.height(),
+        )
         geometry = QPropertyAnimation(self, b"geometry", self)
         geometry.setDuration(self.COMPACT_TRANSITION_MS)
         geometry.setEasingCurve(QEasingCurve.Type.OutCubic)
         geometry.setStartValue(self.geometry())
-        geometry.setEndValue(self._target_geometry(self.HIDDEN_SIZE))
+        geometry.setEndValue(minimize_target)
         geometry.finished.connect(self._complete_media_hide)
         self._animation = geometry
-        self._animation_target = self._target_geometry(self.HIDDEN_SIZE)
+        self._animation_target = minimize_target
         geometry.start()
         # A guarded fallback covers animation-driver interruption (display
         # sleep, shell restart, or Qt event-loop replacement) without allowing
         # an old timer to hide a newer, already-visible activity.
         QTimer.singleShot(
-            260,
+            self.COMPACT_TRANSITION_MS + 80,
             lambda: self._complete_media_hide()
             if (generation == self._visibility_generation and self._auto_hidden)
             else None,
