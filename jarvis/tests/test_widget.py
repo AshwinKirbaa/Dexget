@@ -176,7 +176,7 @@ def test_idle_island_hides_and_reveals_with_rounded_mask():
         assert widget.mask().isEmpty()
         assert widget.HOT_ZONE_WIDTH == 140
         assert widget.HOT_ZONE_HEIGHT == 12
-        assert widget._hover_timer.interval() == 40
+        assert widget._hover_timer.interval() == 100
     finally:
         widget.media_worker.shutdown()
         widget.media_worker.wait(2000)

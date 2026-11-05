@@ -1,7 +1,4 @@
 import os
-import subprocess
-import time
-import atexit
 import sys
 
 def main():
@@ -10,7 +7,6 @@ def main():
         from jarvis.config.environment import load_environment
         load_environment()
         from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtWidgets import QMessageBox
         from PyQt6.QtNetwork import QLocalSocket, QLocalServer
         
         app = QApplication(sys.argv)
@@ -26,32 +22,9 @@ def main():
             socket.waitForBytesWritten(1000)
             sys.exit(0)
 
-        from jarvis.model_runtime import ensure_model_ready
-        runtime = ensure_model_ready(warm=True)
-        ollama_process = runtime.process
-
-        def cleanup():
-            if ollama_process and ollama_process.poll() is None:
-                ollama_process.terminate()
-                try:
-                    ollama_process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    ollama_process.kill()
-        atexit.register(cleanup)
-
-        if not runtime.ready:
-            appdata = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
-            log_dir = os.path.join(appdata, 'JarvisAgent')
-            os.makedirs(log_dir, exist_ok=True)
-            log_path = os.path.join(log_dir, 'startup_log.txt')
-            with open(log_path, "a", encoding="utf-8") as log:
-                log.write(f"Model startup failed ({runtime.model}): {runtime.error}\n")
-            QMessageBox.warning(
-                None, "JARVIS model unavailable",
-                f"The widget will open, but model tasks are unavailable.\n\n{runtime.error}\n\nLog: {log_path}",
-            )
-            
-        print(f"[JARVIS COPILOT] Provider initialized ({runtime.model}: {'ready' if runtime.ready else 'unavailable'})")
+        # Ollama is intentionally not started here. Model-backed questions start
+        # it on demand and unload/terminate it immediately after the response.
+        print("[JARVIS COPILOT] Provider initialized (Ollama: on demand)")
         
         server = QLocalServer()
         server.removeServer("JarvisWidgetInstance")

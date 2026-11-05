@@ -50,12 +50,25 @@ def _make_ollama_fn(model: str = "gemma3:4b", host: str = "http://localhost:1143
     import json as _json
 
     def _call(prompt: str, schema=None) -> Optional[str]:
+        from jarvis.model_runtime import ensure_model_ready
+        runtime = ensure_model_ready(warm=False)
+        if not runtime.ready:
+            from jarvis.model_runtime import release_model
+            release_model(model, stop_server=True)
+            raise ModelUnavailable(
+                f"Local model '{model}' could not start on demand. {runtime.error or ''}".strip()
+            )
         try:
             body = {
                 "model": model,
                 "prompt": prompt,
                 "stream": schema is not None,
-                "options": {"temperature": float(os.getenv("JARVIS_LLM_TEMPERATURE", "0.5")), "num_ctx": 16384, "num_predict": 1024},
+                "keep_alive": os.getenv("JARVIS_OLLAMA_TASK_KEEP_ALIVE", "5m"),
+                "options": {
+                    "temperature": float(os.getenv("JARVIS_LLM_TEMPERATURE", "0.5")),
+                    "num_ctx": int(os.getenv("JARVIS_OLLAMA_NUM_CTX", "4096")),
+                    "num_predict": int(os.getenv("JARVIS_OLLAMA_NUM_PREDICT", "768")),
+                },
             }
             if schema is not None:
                 body["format"] = schema
@@ -283,6 +296,13 @@ def handle_command(agent: Agent, command: str, *, reset_cancel: bool = True) -> 
         return AgentResponse(str(exc), False)
     finally:
         agent.command_lock.release()
+        # No-op for deterministic tasks. If this task used Ollama, unload its
+        # weights and terminate the server process started by Dexget.
+        try:
+            from jarvis.model_runtime import release_model
+            release_model(stop_server=True)
+        except Exception:
+            pass
 
 
 def _handle_command(agent: Agent, command: str) -> AgentResponse:

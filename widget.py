@@ -299,7 +299,7 @@ class MediaSessionWorker(QThread):
             if current != previous:
                 previous = current
                 self.media_changed.emit(current)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(2.0)
 
     @staticmethod
     async def _read_thumbnail(thumbnail):
@@ -403,18 +403,17 @@ class JarvisWidget(QWidget):
         self._collapse_timer.setSingleShot(True)
         self._collapse_timer.timeout.connect(self.collapse_island)
         self._hover_timer = QTimer(self)
-        self._hover_timer.setInterval(40)
+        self._hover_timer.setInterval(100)
         self._hover_timer.timeout.connect(self._check_hot_zone)
         self._hover_timer.start()
         self._media_pulse_timer = QTimer(self)
-        self._media_pulse_timer.setInterval(520)
+        self._media_pulse_timer.setInterval(1200)
         self._media_pulse_timer.timeout.connect(self._pulse_media_indicator)
-        self._media_pulse_timer.start()
         self._charging_hide_timer = QTimer(self)
         self._charging_hide_timer.setSingleShot(True)
         self._charging_hide_timer.timeout.connect(self.finish_charging_activity)
         self._battery_timer = QTimer(self)
-        self._battery_timer.setInterval(1500)
+        self._battery_timer.setInterval(5000)
         self._battery_timer.timeout.connect(self._check_battery_state)
         self._battery_timer.start()
         self._low_power_hide_timer = QTimer(self)
@@ -424,17 +423,17 @@ class JarvisWidget(QWidget):
         self._headset_hide_timer.setSingleShot(True)
         self._headset_hide_timer.timeout.connect(self.finish_headset_activity)
         self._audio_device_timer = QTimer(self)
-        self._audio_device_timer.setInterval(2000)
+        self._audio_device_timer.setInterval(5000)
         self._audio_device_timer.timeout.connect(self._check_audio_device)
         self._audio_device_timer.start()
         self._notification_hide_timer = QTimer(self)
         self._notification_hide_timer.setSingleShot(True)
         self._notification_hide_timer.timeout.connect(self.finish_notification_activity)
         self._notification_timer = QTimer(self)
-        self._notification_timer.setInterval(1200)
+        self._notification_timer.setInterval(3000)
         self._notification_timer.timeout.connect(self._poll_notifications)
         self._foreground_timer = QTimer(self)
-        self._foreground_timer.setInterval(250)
+        self._foreground_timer.setInterval(750)
         self._foreground_timer.timeout.connect(self._track_foreground_window)
         self._foreground_timer.start()
         self.initUI()
@@ -1587,6 +1586,10 @@ class JarvisWidget(QWidget):
             self.status_label.setToolTip(artist)
             playing = bool(self._media.get("playing"))
             playing_now = playing
+            if playing and not self._media_pulse_timer.isActive():
+                self._media_pulse_timer.start()
+            elif not playing:
+                self._media_pulse_timer.stop()
             self.play_pause_btn.setText("❚❚" if playing else "▶")
             artwork = self._media.get("artwork") or b""
             pixmap = QPixmap()
@@ -1605,6 +1608,7 @@ class JarvisWidget(QWidget):
             )
             self._set_media_controls_visible(True)
         else:
+            self._media_pulse_timer.stop()
             self._last_media_key = None
             self.name_label.setText("DEXGET")
             self.status_label.setText(self._assistant_subtitle[:70])
