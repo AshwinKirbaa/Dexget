@@ -194,7 +194,7 @@ class JarvisWorker(QThread):
         self.listening_enabled = False
         self.cancel()
         
-    def submit_text(self, text):
+    def submit_text(self, text, display_text=None):
         if text.lower().strip().rstrip(".!") in ("stop", "cancel", "never mind", "nevermind"):
             self.cancel()
             return True
@@ -204,7 +204,7 @@ class JarvisWorker(QThread):
             self.agent.registry.cancel_event.clear()
             self.busy.set()
             self.busy_changed.emit(True)
-            self.message_received.emit("User", text)
+            self.message_received.emit("User", display_text if display_text is not None else text)
             self.commands.put(text)
             return True
 
@@ -397,6 +397,7 @@ class JarvisWidget(QWidget):
         self._known_notification_ids = set()
         self._last_external_hwnd = None
         self.screen_assist_worker = None
+        self._screen_context = None
         self._headset_active = False
         self._last_audio_device_id = None
         self._collapse_timer = QTimer(self)
@@ -1213,24 +1214,27 @@ class JarvisWidget(QWidget):
         self.screen_assist_btn.setEnabled(False)
         self.update_state("Processing", "Reading the active window...")
         worker = ScreenAssistWorker(self._last_external_hwnd)
-        worker.text_ready.connect(self._submit_screen_question)
+        worker.text_ready.connect(self._screen_context_ready)
         worker.extraction_failed.connect(self._screen_assist_failed)
         worker.finished.connect(lambda: self.screen_assist_btn.setEnabled(True))
         self.screen_assist_worker = worker
         worker.start()
 
-    def _submit_screen_question(self, content):
-        prompt = (
-            "Answer the question or task shown in the active window. Give a direct, "
-            "clear answer. If programming is requested, provide complete runnable code "
-            "with a short explanation. Do not operate the computer or change files; only "
-            "answer from the captured text.\n\nVISIBLE WINDOW TEXT:\n" + content
-        )
-        if not self.worker.submit_text(prompt):
-            self.add_message("Jarvis", "Finish or stop the current task, then try Screen Assist again.")
-        self.expand_island()
+    def _screen_context_ready(self, content):
+        # Capture is intentionally separate from model execution. The user can
+        # now ask a specific question, which is submitted together with this
+        # context only when they press Enter/send.
+        self._screen_context = content
+        self.update_state("Idle", "Screen captured — type your question")
+        self.input_field.setPlaceholderText("Ask about the captured screen...")
+        self.add_message(
+            "Jarvis",
+            "Screen content captured. Type what you want to ask, then press Enter.")
+        self.expand_island(focus_input=True)
 
     def _screen_assist_failed(self, message):
+        self._screen_context = None
+        self.input_field.setPlaceholderText("Type a message...")
         self.add_message("Jarvis", message)
         self.update_state("Idle", "Ready")
         self.expand_island()
@@ -1672,8 +1676,19 @@ class JarvisWidget(QWidget):
     def send_message(self):
         text = self.input_field.text().strip()
         if text:
-            if self.worker.submit_text(text):
+            submitted_text = text
+            if self._screen_context:
+                submitted_text = (
+                    "Answer the user's question using the captured active-window content below. "
+                    "Give a direct, clear answer. If programming is requested, provide complete "
+                    "runnable code with a short explanation. Do not operate the computer or change "
+                    "files; only answer the question.\n\n"
+                    f"USER QUESTION:\n{text}\n\nCAPTURED WINDOW CONTENT:\n{self._screen_context}"
+                )
+            if self.worker.submit_text(submitted_text, display_text=text):
                 self.input_field.clear()
+                self._screen_context = None
+                self.input_field.setPlaceholderText("Type a message...")
 
     def showEvent(self, event):
         super().showEvent(event)

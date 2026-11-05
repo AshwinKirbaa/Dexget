@@ -425,11 +425,20 @@ def test_screen_assist_submits_visible_text_and_blocks_proctoring():
         build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
         widget = JarvisWidget()
     try:
+        widget._screen_context_ready("A problem asks for a Python addition program")
+        assert widget._screen_context
+        assert "captured screen" in widget.input_field.placeholderText().lower()
+        assert not widget.worker.busy.is_set()
+
+        widget.input_field.setText("Write the complete program")
         with patch.object(widget.worker, "submit_text", return_value=True) as submit:
-            widget._submit_screen_question("Write a Python program to add two numbers")
+            widget.send_message()
             prompt = submit.call_args.args[0]
             assert "complete runnable code" in prompt
-            assert "Write a Python program" in prompt
+            assert "Write the complete program" in prompt
+            assert "Python addition program" in prompt
+            assert submit.call_args.kwargs["display_text"] == "Write the complete program"
+            assert widget._screen_context is None
 
         with patch.object(widget, "_proctoring_active", return_value=True):
             with patch.object(widget, "add_message") as add_message:
