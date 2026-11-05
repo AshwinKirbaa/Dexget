@@ -83,13 +83,15 @@ def test_dynamic_island_reacts_to_media_metadata():
         assert widget.MEDIA_MIN_WIDTH <= widget._compact_size().width() < widget.MEDIA_SIZE.width()
         assert widget._compact_size().height() == widget.MEDIA_SIZE.height()
 
+        starting_center_x = widget.geometry().center().x()
         widget.hide_media_island()
         assert widget._media_manually_hidden
         assert widget._auto_hidden
-        minimize_target = widget._animation.endValue()
-        area = widget.screen().availableGeometry()
+        minimize_target = widget._animation_target
         assert minimize_target.size() == widget.MINIMIZE_SIZE
-        assert minimize_target.y() + minimize_target.height() <= area.y()
+        assert abs(minimize_target.center().x() - starting_center_x) <= 1
+        midpoint = widget._centered_frame(starting_center_x, 8, 302, 50)
+        assert abs(midpoint.center().x() - starting_center_x) <= 1
         deadline = time.monotonic() + 1
         while not widget.isHidden() and time.monotonic() < deadline:
             app.processEvents()

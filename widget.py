@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QGraphicsOpacityEffect)
 from PyQt6.QtCore import (Qt, QPoint, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
-                          QParallelAnimationGroup,
+                          QParallelAnimationGroup, QVariantAnimation,
                           QRectF, QAbstractAnimation)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap)
@@ -797,6 +797,10 @@ class JarvisWidget(QWidget):
         y = area.y() if size == self.HIDDEN_SIZE else area.y() + self.TOP_MARGIN
         return QRect(x, y, size.width(), size.height())
 
+    @staticmethod
+    def _centered_frame(center_x, y, width, height):
+        return QRect(round(center_x - width / 2.0), y, width, height)
+
     def _apply_default_container_style(self):
         self.container.setStyleSheet("""
             #Container {
@@ -996,6 +1000,10 @@ class JarvisWidget(QWidget):
 
     def hide_media_island(self):
         """Hide the UI without stopping either background worker."""
+        # Capture the visible center before interrupting an in-flight media
+        # resize. Stopping it can otherwise deliver one final queued geometry
+        # update and shift the minimize anchor sideways.
+        locked_center_x = self.geometry().center().x()
         self._media_manually_hidden = True
         self._is_hiding = True
         # Require the pointer to leave and re-enter the hot zone. Otherwise a
@@ -1012,26 +1020,45 @@ class JarvisWidget(QWidget):
         self._visibility_generation += 1
         generation = self._visibility_generation
         self.setWindowOpacity(1.0)
-        # Morph toward the top edge, then hide once. Animating native window
+        # Morph in place, then hide once. Animating native window
         # opacity in parallel with geometry makes Windows recompose the layered
         # surface twice per frame and causes flashes on some GPUs.
-        screen = self.screen() or QApplication.primaryScreen()
-        area = screen.availableGeometry()
+        start_geometry = self.geometry()
+        start_geometry.moveCenter(
+            QPoint(locked_center_x, start_geometry.center().y()))
+        self.setGeometry(start_geometry)
         minimize_target = QRect(
-            area.x() + (area.width() - self.MINIMIZE_SIZE.width()) // 2,
-            area.y() - self.MINIMIZE_SIZE.height(),
+            round(locked_center_x - self.MINIMIZE_SIZE.width() / 2.0),
+            start_geometry.y(),
             self.MINIMIZE_SIZE.width(),
             self.MINIMIZE_SIZE.height(),
         )
-        geometry = QPropertyAnimation(self, b"geometry", self)
-        geometry.setDuration(self.COMPACT_TRANSITION_MS)
-        geometry.setEasingCurve(QEasingCurve.Type.OutCubic)
-        geometry.setStartValue(self.geometry())
-        geometry.setEndValue(minimize_target)
-        geometry.finished.connect(self._complete_media_hide)
-        self._animation = geometry
+
+        def update_centered_geometry(progress):
+            progress = float(progress)
+            width = round(start_geometry.width() +
+                          (minimize_target.width() - start_geometry.width()) * progress)
+            height = round(start_geometry.height() +
+                           (minimize_target.height() - start_geometry.height()) * progress)
+            y = round(start_geometry.y() +
+                      (minimize_target.y() - start_geometry.y()) * progress)
+            frame = self._centered_frame(
+                locked_center_x, y, width, height)
+            # Keep move last: Windows may reposition a frameless top-level
+            # window while processing resize(), especially across DPI zones.
+            self.resize(frame.size())
+            self.move(frame.topLeft())
+
+        geometry_progress = QVariantAnimation(self)
+        geometry_progress.setDuration(self.COMPACT_TRANSITION_MS)
+        geometry_progress.setEasingCurve(QEasingCurve.Type.OutCubic)
+        geometry_progress.setStartValue(0.0)
+        geometry_progress.setEndValue(1.0)
+        geometry_progress.valueChanged.connect(update_centered_geometry)
+        geometry_progress.finished.connect(self._complete_media_hide)
+        self._animation = geometry_progress
         self._animation_target = minimize_target
-        geometry.start()
+        geometry_progress.start()
         # A guarded fallback covers animation-driver interruption (display
         # sleep, shell restart, or Qt event-loop replacement) without allowing
         # an old timer to hide a newer, already-visible activity.
