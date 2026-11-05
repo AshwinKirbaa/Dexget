@@ -7,9 +7,9 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                              QFrame, QSizePolicy, QGraphicsDropShadowEffect,
                              QGraphicsOpacityEffect)
-from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
+from PyQt6.QtCore import (Qt, QPoint, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
-                          QSequentialAnimationGroup, QParallelAnimationGroup,
+                          QParallelAnimationGroup,
                           QRectF, QAbstractAnimation)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap)
@@ -369,6 +369,8 @@ class JarvisWidget(QWidget):
     TOP_MARGIN = 8
     HOT_ZONE_WIDTH = 140
     HOT_ZONE_HEIGHT = 12
+    COMPACT_TRANSITION_MS = 320
+    PANEL_TRANSITION_MS = 380
 
     def __init__(self):
         super().__init__()
@@ -863,15 +865,8 @@ class JarvisWidget(QWidget):
         size = self._expanded_size() if self.is_expanded else self._compact_size()
         self.setGeometry(self._target_geometry(size))
 
-    @staticmethod
-    def _fluid_curve():
-        """A fast, soft-settling curve without geometry overshoot."""
-        curve = QEasingCurve(QEasingCurve.Type.BezierSpline)
-        curve.addCubicBezierSegment(
-            QPointF(0.22, 1.0), QPointF(0.36, 1.0), QPointF(1.0, 1.0))
-        return curve
-
-    def _animate_to(self, size, duration=360, curve=None):
+    def _animate_to(self, size, duration=None, curve=QEasingCurve.Type.OutCubic):
+        duration = duration or self.COMPACT_TRANSITION_MS
         target = self._target_geometry(size)
         if (self._animation and self._animation_target == target
                 and self._animation.state() == QAbstractAnimation.State.Running):
@@ -885,13 +880,13 @@ class JarvisWidget(QWidget):
         self._animation = QPropertyAnimation(self, b"geometry", self)
         self._animation_target = target
         self._animation.setDuration(duration)
-        self._animation.setEasingCurve(curve or self._fluid_curve())
+        self._animation.setEasingCurve(curve)
         self._animation.setStartValue(self.geometry())
         self._animation.setEndValue(target)
         self._animation.start()
         return self._transition_generation
 
-    def _present_compact(self, size, duration=330):
+    def _present_compact(self, size, duration=None):
         """Reveal at a deterministic geometry, then perform one fluid resize."""
         self._visibility_generation += 1
         self._is_hiding = False
@@ -908,31 +903,7 @@ class JarvisWidget(QWidget):
             self.setGeometry(self._target_geometry(start))
         self.show()
         self.raise_()
-        self._animate_to(size, duration, self._fluid_curve())
-
-    def _animate_media_bump(self):
-        """A subtle live-activity breathe when the playing item changes."""
-        if self._animation:
-            self._animation.stop()
-        compact = self._compact_size()
-        base = self._target_geometry(compact)
-        bump_size = QSize(compact.width() + 14, compact.height() + 4)
-        bump = self._target_geometry(bump_size)
-        grow = QPropertyAnimation(self, b"geometry")
-        grow.setDuration(105)
-        grow.setEasingCurve(QEasingCurve.Type.OutCubic)
-        grow.setStartValue(self.geometry())
-        grow.setEndValue(bump)
-        settle = QPropertyAnimation(self, b"geometry")
-        settle.setDuration(260)
-        settle.setEasingCurve(QEasingCurve.Type.OutBack)
-        settle.setStartValue(bump)
-        settle.setEndValue(base)
-        sequence = QSequentialAnimationGroup(self)
-        sequence.addAnimation(grow)
-        sequence.addAnimation(settle)
-        self._animation = sequence
-        sequence.start()
+        self._animate_to(size, duration or self.COMPACT_TRANSITION_MS)
 
     def _fade_expanded_content(self):
         if not self.is_expanded:
@@ -976,7 +947,7 @@ class JarvisWidget(QWidget):
         # Expand directly from the already content-sized media pill. Using a
         # fixed width here caused a second horizontal resize and visible flash.
         generation = self._animate_to(
-            self._expanded_size(), 420, self._fluid_curve())
+            self._expanded_size(), self.PANEL_TRANSITION_MS)
         # Let the black island surface establish first; adding the complex
         # scroll/input layout at the same instant as the native resize causes
         # a one-frame flash on DWM layered windows.
@@ -1006,7 +977,7 @@ class JarvisWidget(QWidget):
         self.scroll_area.hide()
         self.input_frame.hide()
         self.expand_btn.setText("⌄")
-        self._animate_to(self._compact_size(), 360, self._fluid_curve())
+        self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS)
 
     def hide_idle_island(self):
         if (self.worker.busy.is_set()
@@ -1020,7 +991,7 @@ class JarvisWidget(QWidget):
         self.input_frame.hide()
         self.expand_btn.setText("⌄")
         self.setWindowOpacity(0.03)
-        self._animate_to(self.HIDDEN_SIZE, 300, self._fluid_curve())
+        self._animate_to(self.HIDDEN_SIZE, self.COMPACT_TRANSITION_MS)
 
     def hide_media_island(self):
         """Hide the UI without stopping either background worker."""
@@ -1044,8 +1015,8 @@ class JarvisWidget(QWidget):
         # opacity in parallel with geometry makes Windows recompose the layered
         # surface twice per frame and causes flashes on some GPUs.
         geometry = QPropertyAnimation(self, b"geometry", self)
-        geometry.setDuration(300)
-        geometry.setEasingCurve(self._fluid_curve())
+        geometry.setDuration(self.COMPACT_TRANSITION_MS)
+        geometry.setEasingCurve(QEasingCurve.Type.OutCubic)
         geometry.setStartValue(self.geometry())
         geometry.setEndValue(self._target_geometry(self.HIDDEN_SIZE))
         geometry.finished.connect(self._complete_media_hide)
@@ -1120,7 +1091,7 @@ class JarvisWidget(QWidget):
         self.is_expanded = False
         self.scroll_area.hide()
         self.input_frame.hide()
-        self._present_compact(self._compact_size(), 340)
+        self._present_compact(self._compact_size())
         self.activateWindow()
 
     def activate_media_island(self):
@@ -1131,7 +1102,7 @@ class JarvisWidget(QWidget):
         self.is_expanded = False
         self.scroll_area.hide()
         self.input_frame.hide()
-        self._present_compact(self._compact_size(), 340)
+        self._present_compact(self._compact_size())
 
     def _pulse_media_indicator(self):
         if not self._media or not self._media.get("playing"):
@@ -1369,7 +1340,7 @@ class JarvisWidget(QWidget):
         self.charging_percent.show()
         self.battery_indicator.show()
         self._update_charging_percent(percent)
-        self._present_compact(self.CHARGING_SIZE, 340)
+        self._present_compact(self.CHARGING_SIZE)
         self._charging_hide_timer.start(4200)
 
     def finish_charging_activity(self, restore=True):
@@ -1425,7 +1396,7 @@ class JarvisWidget(QWidget):
                 display_name = display_name[len(prefix):-1]
                 break
         self.headset_name.setText(display_name[:34] or "Headset")
-        self._present_compact(self.HEADSET_SIZE, 340)
+        self._present_compact(self.HEADSET_SIZE)
         self._headset_hide_timer.start(4200)
 
     def finish_headset_activity(self, restore=True):
@@ -1481,7 +1452,7 @@ class JarvisWidget(QWidget):
         self.low_power_percent.show()
         self.low_power_battery.show()
         self._update_low_power_percent(percent)
-        self._present_compact(self.LOW_POWER_SIZE, 340)
+        self._present_compact(self.LOW_POWER_SIZE)
         self._low_power_hide_timer.start(4200)
 
     def finish_low_power_activity(self, restore=True):
@@ -1538,7 +1509,7 @@ class JarvisWidget(QWidget):
         self.title_bar.setFixedHeight(self.NOTIFICATION_SIZE.height())
         self.notification_icon.show()
         self.notification_identity.show()
-        self._present_compact(self.NOTIFICATION_SIZE, 340)
+        self._present_compact(self.NOTIFICATION_SIZE)
         self._notification_hide_timer.start(5200)
 
     def finish_notification_activity(self, restore=True):
