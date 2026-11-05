@@ -209,6 +209,42 @@ class JarvisWorker(QThread):
             return True
 
 
+class ScreenAssistWorker(QThread):
+    """Extract accessibility text without blocking the island animation."""
+    text_ready = pyqtSignal(str)
+    extraction_failed = pyqtSignal(str)
+
+    def __init__(self, hwnd):
+        super().__init__()
+        self.hwnd = hwnd
+
+    def run(self):
+        try:
+            from pywinauto import Desktop
+            window = Desktop(backend="uia").window(handle=self.hwnd)
+            parts = []
+            seen = set()
+            for control in [window] + window.descendants():
+                try:
+                    text = (control.window_text() or "").strip()
+                except Exception:
+                    continue
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                parts.append(text)
+                if sum(len(value) for value in parts) >= 12000:
+                    break
+            content = "\n".join(parts).strip()
+            if content:
+                self.text_ready.emit(content[:12000])
+            else:
+                self.extraction_failed.emit(
+                    "I couldn't read text from that window. Select or open the question and try again.")
+        except Exception as exc:
+            self.extraction_failed.emit(f"Screen Assist couldn't read the active window: {exc}")
+
+
 class MediaSessionWorker(QThread):
     """Poll Windows' global media session without blocking the Qt UI."""
     media_changed = pyqtSignal(object)
@@ -359,6 +395,8 @@ class JarvisWidget(QWidget):
         self._notification_active = False
         self._notification_listener = None
         self._known_notification_ids = set()
+        self._last_external_hwnd = None
+        self.screen_assist_worker = None
         self._headset_active = False
         self._last_audio_device_id = None
         self._collapse_timer = QTimer(self)
@@ -395,6 +433,10 @@ class JarvisWidget(QWidget):
         self._notification_timer = QTimer(self)
         self._notification_timer.setInterval(1200)
         self._notification_timer.timeout.connect(self._poll_notifications)
+        self._foreground_timer = QTimer(self)
+        self._foreground_timer.setInterval(250)
+        self._foreground_timer.timeout.connect(self._track_foreground_window)
+        self._foreground_timer.start()
         self.initUI()
         # Copilot/startup presents only the compact island. The conversation
         # panel opens later when the user clicks the island.
@@ -567,6 +609,18 @@ class JarvisWidget(QWidget):
         self.play_pause_btn.clicked.connect(lambda: self.media_worker.control("play_pause"))
         self.next_btn.clicked.connect(lambda: self.media_worker.control("next"))
         self.media_hide_btn.clicked.connect(self.hide_media_island)
+
+        self.screen_assist_btn = QPushButton("✦")
+        self.screen_assist_btn.setToolTip("Answer the question visible in the active window")
+        self.screen_assist_btn.setFixedSize(28, 28)
+        self.screen_assist_btn.setFont(QFont("Segoe UI Symbol", 13, QFont.Weight.DemiBold))
+        self.screen_assist_btn.setStyleSheet("""
+            QPushButton { background: transparent; border: none; color: #8ed8ff; }
+            QPushButton:hover { color: white; background: rgba(90, 180, 255, 35); border-radius: 14px; }
+            QPushButton:pressed { color: #49aef0; }
+            QPushButton:disabled { color: #59616b; }
+        """)
+        self.screen_assist_btn.clicked.connect(self.start_screen_assist)
         
         self.close_btn = QPushButton("✕")
         self.close_btn.setFixedSize(24, 24)
@@ -604,6 +658,7 @@ class JarvisWidget(QWidget):
         title_layout.addWidget(self.play_pause_btn)
         title_layout.addWidget(self.next_btn)
         title_layout.addWidget(self.media_hide_btn)
+        title_layout.addWidget(self.screen_assist_btn)
         title_layout.addWidget(self.close_btn)
         self._set_media_controls_visible(False)
         
@@ -1117,6 +1172,70 @@ class JarvisWidget(QWidget):
             self.show_headset_activity(name)
         self._last_audio_device_id = device_id
 
+    def _track_foreground_window(self):
+        try:
+            import ctypes
+            hwnd = int(ctypes.windll.user32.GetForegroundWindow())
+            own_hwnd = int(self.winId())
+            if hwnd and hwnd != own_hwnd:
+                self._last_external_hwnd = hwnd
+        except Exception:
+            pass
+
+    @staticmethod
+    def _proctoring_active():
+        blocked = {
+            "safeexambrowser.exe", "safexambrowserclient.exe",
+            "safeexambrowser.client.exe", "seb.exe", "sebwindowsclient.exe",
+            "lockdownbrowser.exe", "respondus.exe",
+            "proctorio.exe", "proctortrack.exe", "examsoft.exe", "examplify.exe",
+        }
+        try:
+            import psutil
+            return any((process.info.get("name") or "").lower() in blocked
+                       for process in psutil.process_iter(["name"]))
+        except Exception:
+            return False
+
+    def start_screen_assist(self):
+        if self._proctoring_active():
+            self.add_message(
+                "Jarvis",
+                "Screen Assist is disabled while exam or proctoring software is running.")
+            self.expand_island()
+            return
+        if self.screen_assist_worker and self.screen_assist_worker.isRunning():
+            return
+        self._track_foreground_window()
+        if not self._last_external_hwnd:
+            self.add_message("Jarvis", "Open the question window, then press Screen Assist again.")
+            self.expand_island()
+            return
+        self.screen_assist_btn.setEnabled(False)
+        self.update_state("Processing", "Reading the active window...")
+        worker = ScreenAssistWorker(self._last_external_hwnd)
+        worker.text_ready.connect(self._submit_screen_question)
+        worker.extraction_failed.connect(self._screen_assist_failed)
+        worker.finished.connect(lambda: self.screen_assist_btn.setEnabled(True))
+        self.screen_assist_worker = worker
+        worker.start()
+
+    def _submit_screen_question(self, content):
+        prompt = (
+            "Answer the question or task shown in the active window. Give a direct, "
+            "clear answer. If programming is requested, provide complete runnable code "
+            "with a short explanation. Do not operate the computer or change files; only "
+            "answer from the captured text.\n\nVISIBLE WINDOW TEXT:\n" + content
+        )
+        if not self.worker.submit_text(prompt):
+            self.add_message("Jarvis", "Finish or stop the current task, then try Screen Assist again.")
+        self.expand_island()
+
+    def _screen_assist_failed(self, message):
+        self.add_message("Jarvis", message)
+        self.update_state("Idle", "Ready")
+        self.expand_island()
+
     def _start_notification_listener(self):
         try:
             asyncio.run(self._initialize_notification_listener())
@@ -1208,6 +1327,7 @@ class JarvisWidget(QWidget):
         self.identity_widget.hide()
         self._set_media_controls_visible(False)
         self.close_btn.hide()
+        self.screen_assist_btn.hide()
         self.charging_label.show()
         self.charging_percent.show()
         self.battery_indicator.show()
@@ -1225,6 +1345,7 @@ class JarvisWidget(QWidget):
         self.status_dot.show()
         self.identity_widget.show()
         self.close_btn.show()
+        self.screen_assist_btn.show()
         if not restore:
             return
         if self._media:
@@ -1257,6 +1378,7 @@ class JarvisWidget(QWidget):
         self.identity_widget.hide()
         self._set_media_controls_visible(False)
         self.close_btn.hide()
+        self.screen_assist_btn.hide()
         self.earbuds_indicator.show()
         self.headset_identity.show()
         self.connection_ring.show()
@@ -1279,6 +1401,7 @@ class JarvisWidget(QWidget):
         self.status_dot.show()
         self.identity_widget.show()
         self.close_btn.show()
+        self.screen_assist_btn.show()
         if self._media:
             self._set_media_controls_visible(True)
         if not restore:
@@ -1316,6 +1439,7 @@ class JarvisWidget(QWidget):
         self.identity_widget.hide()
         self._set_media_controls_visible(False)
         self.close_btn.hide()
+        self.screen_assist_btn.hide()
         self.low_power_label.show()
         self.low_power_percent.show()
         self.low_power_battery.show()
@@ -1333,6 +1457,7 @@ class JarvisWidget(QWidget):
         self.status_dot.show()
         self.identity_widget.show()
         self.close_btn.show()
+        self.screen_assist_btn.show()
         if self._media:
             self._set_media_controls_visible(True)
         if not restore:
@@ -1366,6 +1491,7 @@ class JarvisWidget(QWidget):
         self.identity_widget.hide()
         self._set_media_controls_visible(False)
         self.close_btn.hide()
+        self.screen_assist_btn.hide()
         app_name = (app_name or "Windows").strip()
         self.notification_icon.setText((app_name[:1] or "N").upper())
         self.notification_title.setText((title or "New notification")[:52])
@@ -1385,6 +1511,7 @@ class JarvisWidget(QWidget):
         self.status_dot.show()
         self.identity_widget.show()
         self.close_btn.show()
+        self.screen_assist_btn.show()
         if self._media:
             self._set_media_controls_visible(True)
         if not restore:
@@ -1521,6 +1648,9 @@ class JarvisWidget(QWidget):
             self._closing = True
             if hasattr(self, "media_worker"):
                 self.media_worker.shutdown()
+            if self.screen_assist_worker and self.screen_assist_worker.isRunning():
+                self.screen_assist_worker.requestInterruption()
+                self.screen_assist_worker.wait(1500)
             self.worker.shutdown()
             self.hide()
             event.ignore()

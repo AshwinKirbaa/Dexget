@@ -417,3 +417,28 @@ def test_duplicate_resize_requests_do_not_restart_running_animation():
         assert widget.worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_screen_assist_submits_visible_text_and_blocks_proctoring():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        with patch.object(widget.worker, "submit_text", return_value=True) as submit:
+            widget._submit_screen_question("Write a Python program to add two numbers")
+            prompt = submit.call_args.args[0]
+            assert "complete runnable code" in prompt
+            assert "Write a Python program" in prompt
+
+        with patch.object(widget, "_proctoring_active", return_value=True):
+            with patch.object(widget, "add_message") as add_message:
+                widget.start_screen_assist()
+                assert "disabled" in add_message.call_args.args[1]
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
