@@ -1,4 +1,5 @@
 import PyInstaller.__main__
+import importlib.util
 
 def build():
     # Basic PyInstaller arguments
@@ -7,20 +8,20 @@ def build():
         '--name=JarvisAgent',     # Name of the executable
         '--onefile',              # Create a single executable
         
-        # We need to collect some tricky packages
-        # Uncomment these if you encounter missing module errors when running the exe:
-        '--collect-all=vosk',
-        '--collect-all=chromadb',
-        '--collect-all=sentence_transformers',
-        '--collect-all=faster_whisper',
-        
         '--hidden-import=jarvis',
         '--hidden-import=jarvis_integration',
-        '--hidden-import=legacy_jarvis',
+        '--hidden-import=jarvis.model_runtime',
         '--hidden-import=main',
         '--exclude-module=PySide6',
+        '--windowed',              # Copilot key launch must not open a console
         '--clean'                 # Clean PyInstaller cache
     ]
+
+    # ARM64 intentionally omits unavailable voice packages. Collect optional
+    # packages only when they are actually installed in the build interpreter.
+    for package in ('vosk', 'chromadb', 'sentence_transformers', 'faster_whisper', 'winrt'):
+        if importlib.util.find_spec(package) is not None:
+            args.append(f'--collect-all={package}')
 
     print(f"Running PyInstaller with args: {args}")
     PyInstaller.__main__.run(args)

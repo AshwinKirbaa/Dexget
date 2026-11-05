@@ -28,6 +28,18 @@ progress. **Stop** cancels subsequent actions; an in-flight model request or nat
 tool call must return before the worker exits. Moving the mouse to a screen corner
 also triggers PyAutoGUI's fail-safe.
 
+For faster natural-language routing, configure a TypeSafe/JEV API key in `.env`:
+
+```env
+TYPESAFE_API_KEY=your_key_here
+JARVIS_JEV_MODE=active
+```
+
+JEV classifies unfamiliar phrasing before the larger planning model, reuses its
+HTTP connection, caches repeated commands for five minutes, and falls back to the
+local semantic router if it is disabled or unconfigured. Exact system commands
+continue to use the deterministic router and make no network call.
+
 The planner can inspect webpages, fill fields, click controls, read results,
 select dropdown options, switch tabs, and enter iframes. Chrome is the default;
 set `JARVIS_BROWSER=edge` for Edge. Automation uses its own persistent profile
@@ -83,6 +95,8 @@ Implementation references: [Selenium browser windows](https://www.selenium.dev/d
 - **Agentic Execution**: Capable of creating plans, executing actions, observing results, and verifying success.
 - **Desktop Automation**: Performs filesystem operations, browser navigation, and application launching.
 - **Hardware Integration**: Can be packaged as a Windows MSIX app and launched directly via the Copilot hardware key.
+- **File Management**: Opens, searches, creates, lists, copies, moves, and deletes files or folders using natural-language commands. Copy/move and delete operations retain the widget's confirmation safeguards.
+- **Windows Controls**: Opens specific Settings pages; reports specifications, battery, display, and storage; controls volume and laptop brightness; locks, signs out, sleeps, restarts, or shuts down; and switches between balanced, performance, and power-saver plans.
 
 ## Architecture
 

@@ -5,6 +5,17 @@ from jarvis.agent.tool_registry import ToolRegistry
 from .accounts import account_manager
 from jarvis.automation.browser_session import BrowserSessionRequest, browser_session_manager
 
+
+def _launch_installed_youtube(registry: ToolRegistry, query: str, app: str, profile: str) -> ToolResult:
+    """Call old and new win_youtube_search registrations compatibly."""
+    kwargs = {"query": query, "app": app}
+    try:
+        if "profile" in registry.get("win_youtube_search").parameters:
+            kwargs["profile"] = profile
+    except Exception:
+        pass
+    return registry.execute("win_youtube_search", **kwargs)
+
 class YouTubePlayTask:
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
@@ -13,6 +24,22 @@ class YouTubePlayTask:
         # 1. Resolve account policy
         account = account_manager.get_account_for_task("youtube", account_override)
         target_browser = browser_override or account.browser
+
+        # Use the installed YouTube app with the selected real Chrome profile.
+        # The generic Playwright profile is deliberately isolated and therefore
+        # cannot share the user's Google login.
+        if self.registry.has("win_youtube_search"):
+            if self.registry.has("win_unmute"):
+                self.registry.execute("win_unmute")
+            direct = _launch_installed_youtube(
+                self.registry, query, "YouTube", account.profile_dir
+            )
+            if direct.success:
+                return ToolResult(
+                    True,
+                    output=direct.output,
+                    observation=f"Playing '{query}' in YouTube using {account.name}.",
+                )
         
         # 2. Select browser/profile
         req = BrowserSessionRequest(
@@ -81,6 +108,25 @@ class YouTubeMusicPlayTask:
     def execute(self, query: str, account_override: Optional[str] = None, browser_override: Optional[str] = None) -> ToolResult:
         account = account_manager.get_account_for_task("youtube_music", account_override)
         target_browser = browser_override or account.browser
+
+        # Prefer the installed YouTube Music PWA. Its Start Menu shortcut
+        # contains the user's real Chrome profile and app id, so it preserves
+        # sign-in and can open the resolved track directly without remote
+        # browser-control consent or a fragile search-result click.
+        if self.registry.has("win_youtube_search"):
+            # An explicit play request implies audible playback. Clear master
+            # mute when the audio tool is available, without changing volume.
+            if self.registry.has("win_unmute"):
+                self.registry.execute("win_unmute")
+            direct = _launch_installed_youtube(
+                self.registry, query, "YouTube Music", account.profile_dir
+            )
+            if direct.success:
+                return ToolResult(
+                    True,
+                    output=direct.output,
+                    observation=f"Playing '{query}' in the installed YouTube Music app using {account.name}.",
+                )
         
         req = BrowserSessionRequest(
             logical_account=account.name,
@@ -127,6 +173,12 @@ class YouTubeMusicPlayTask:
         if not res.success:
             return res
             
-        time.sleep(2) 
-        return ToolResult(True, observation=f"Playing '{query}' on YouTube Music using {account.name} account in {target_browser}.")
+        time.sleep(2)
+        verify = self.registry.execute("browser_observe")
+        if not verify.success:
+            return ToolResult(False, observation="The song was selected, but playback could not be verified.")
+        verify_text = (verify.observation or "").lower()
+        if "music.youtube.com" not in verify_text and "watch" not in verify_text:
+            return ToolResult(False, observation="YouTube Music opened, but the selected song did not start playing.")
+        return ToolResult(True, observation=f"Playing '{query}' on YouTube Music in {target_browser}.")
 

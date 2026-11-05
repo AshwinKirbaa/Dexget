@@ -95,13 +95,14 @@ def build_default_registry(confirm_fn=None) -> ToolRegistry:
     """
     registry = ToolRegistry(confirm_fn=confirm_fn)
 
-    from jarvis.tools import filesystem, terminal, process, windows, web_extract
+    from jarvis.tools import filesystem, terminal, process, windows, web_extract, remote_server
 
     filesystem.register(registry)
     terminal.register(registry)
     process.register(registry)
     windows.register(registry)
     web_extract.register(registry)
+    remote_server.register(registry)
     
     try:
         from jarvis.capabilities import windows_system

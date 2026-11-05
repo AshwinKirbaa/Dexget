@@ -1,5 +1,7 @@
 import os
 import logging
+import threading
+import time
 from typing import Optional, Tuple
 from jarvis.semantic.intent_schema import SemanticIntent, SemanticDecision
 from jarvis.semantic.jev_client import classify_intent
@@ -7,12 +9,49 @@ from jarvis.semantic.context import context
 from jarvis.router import RouteResult, RouteType, ToolCall
 
 logger = logging.getLogger(__name__)
+_cache = {}
+_cache_lock = threading.Lock()
+
+
+def _cache_key(command: str) -> str:
+    return " ".join(command.lower().split())
+
+
+def _get_cached(command: str):
+    ttl = float(os.environ.get("JARVIS_JEV_CACHE_TTL_SECONDS", "300"))
+    with _cache_lock:
+        item = _cache.get(_cache_key(command))
+        if item and time.monotonic() - item[0] <= ttl:
+            return item[1]
+    return None
+
+
+def _put_cached(command: str, decision: SemanticDecision):
+    with _cache_lock:
+        if len(_cache) >= 128:
+            oldest = min(_cache, key=lambda key: _cache[key][0])
+            _cache.pop(oldest, None)
+        _cache[_cache_key(command)] = (time.monotonic(), decision)
 
 def evaluate_jev(command: str) -> Tuple[Optional[SemanticDecision], Optional[RouteResult]]:
     """Classifies with Jev and returns (Decision, RouteResult)."""
     jev_mode = os.environ.get("JARVIS_JEV_MODE", "shadow").lower()
     if jev_mode == "disabled":
         return None, None
+
+    if jev_mode == "shadow":
+        if not os.environ.get("TYPESAFE_API_KEY", "").strip():
+            return None, None
+        # Shadow classification is observational and must never slow the user.
+        threading.Thread(
+            target=lambda: _shadow_classify(command), daemon=True,
+            name="jarvis-jev-shadow",
+        ).start()
+        return None, None
+
+    cached = _get_cached(command)
+    if cached is not None:
+        return cached, map_decision_to_route(cached, command)
         
     timeout = float(os.environ.get("JARVIS_SEMANTIC_TIMEOUT_SECONDS", "2.0"))
     
@@ -43,6 +82,7 @@ def evaluate_jev(command: str) -> Tuple[Optional[SemanticDecision], Optional[Rou
         return None, None
         
     decision = res
+    _put_cached(command, decision)
         
     auto_execute_threshold = float(os.environ.get("JARVIS_JEV_AUTO_EXECUTE_THRESHOLD", "0.85"))
     agent_threshold = float(os.environ.get("JARVIS_JEV_AGENT_THRESHOLD", "0.60"))
@@ -55,6 +95,15 @@ def evaluate_jev(command: str) -> Tuple[Optional[SemanticDecision], Optional[Rou
         
     route_res = map_decision_to_route(decision, command)
     return decision, route_res
+
+
+def _shadow_classify(command: str) -> None:
+    try:
+        decision = classify_intent(command, context.format_for_prompt())
+        _put_cached(command, decision)
+        logger.debug("JEV shadow intent=%s confidence=%.2f", decision.intent, decision.confidence)
+    except Exception as exc:
+        logger.debug("JEV shadow classification unavailable: %s", exc)
 
 def map_decision_to_route(decision: SemanticDecision, original_cmd: str) -> Optional[RouteResult]:
     intent = decision.intent
@@ -81,12 +130,12 @@ def map_decision_to_route(decision: SemanticDecision, original_cmd: str) -> Opti
             
     elif intent == SemanticIntent.YOUTUBE_PLAY or intent == SemanticIntent.YOUTUBE_SEARCH:
         if decision.query:
-            return RouteResult(RouteType.BROWSER, tool_name="youtube_play", tool_args={"query": decision.query}, label=f"Playing {decision.query} on YouTube")
+            return RouteResult(RouteType.TASK, tool_name="youtube_play", tool_args={"query": decision.query}, label=f"Playing {decision.query} on YouTube")
         return RouteResult(RouteType.CHAT, text="What would you like me to search for on YouTube?")
             
     elif intent == SemanticIntent.YOUTUBE_MUSIC_PLAY or intent == SemanticIntent.YOUTUBE_MUSIC_SEARCH:
         if decision.query:
-            return RouteResult(RouteType.BROWSER, tool_name="youtube_music_play", tool_args={"query": decision.query}, label=f"Playing {decision.query} on YouTube Music")
+            return RouteResult(RouteType.TASK, tool_name="youtube_music_play", tool_args={"query": decision.query}, label=f"Playing {decision.query} on YouTube Music")
         return RouteResult(RouteType.CHAT, text="Which song should I play on YouTube Music?")
             
     elif intent == SemanticIntent.LOCAL_MEDIA_PLAY:
@@ -121,12 +170,17 @@ def map_decision_to_route(decision: SemanticDecision, original_cmd: str) -> Opti
         return RouteResult(RouteType.CHAT, text=f"Sure. What would you like me to research in {browser_name.capitalize()}?")
         
     elif intent == SemanticIntent.SYSTEM_ACTION or intent == SemanticIntent.WINDOWS_ACTION:
-        return RouteResult(RouteType.CHAT, text="I'm not exactly sure which system action you want me to perform.")
+        # The general agent can select only registered tools and retains all
+        # confirmation checks for power or destructive actions.
+        return RouteResult(RouteType.AGENT, text=original_cmd)
         
     elif intent == SemanticIntent.UNKNOWN:
         return RouteResult(RouteType.CHAT, text="I'm not sure what you want me to do. Could you rephrase that?")
 
     elif intent == SemanticIntent.AGENT_TASK:
+        return RouteResult(RouteType.AGENT, text=original_cmd)
+
+    elif intent in (SemanticIntent.KNOWLEDGE_QUERY, SemanticIntent.CONVERSATION):
         return RouteResult(RouteType.AGENT, text=original_cmd)
 
     return RouteResult(RouteType.AGENT)

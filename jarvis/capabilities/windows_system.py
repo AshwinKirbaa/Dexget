@@ -1,8 +1,14 @@
 import subprocess
 import re
 import os
-import uiautomation as auto
+import ctypes
+import ctypes.wintypes as wintypes
+try:
+    import uiautomation as auto
+except ImportError:
+    auto = None
 import time
+import threading
 from typing import Dict, Any, List, Optional
 from jarvis.tools.base import Tool, ToolResult
 
@@ -26,10 +32,120 @@ def run_cmd(args: List[str]) -> str:
     except Exception as e:
         return f"Error: {e}"
 
+DESKTOP_ALL_ACCESS = 0x01FF
+
+def run_in_desktop_thread(fn, *args, **kwargs):
+    """Run fn in a dedicated thread attached to 'Default' desktop station."""
+    res_box = [None, None]
+    def worker():
+        try:
+            try:
+                user32 = ctypes.windll.user32
+                h_default = user32.OpenDesktopW("Default", 0, False, DESKTOP_ALL_ACCESS)
+                if h_default:
+                    user32.SetThreadDesktop(h_default)
+            except Exception:
+                pass
+            res_box[0] = fn(*args, **kwargs)
+        except Exception as e:
+            res_box[1] = e
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    if res_box[1]:
+        raise res_box[1]
+    return res_box[0]
+
+def ensure_desktop():
+    """Ensure thread desktop is set to interactive 'Default' station."""
+    try:
+        user32 = ctypes.windll.user32
+        h_default = user32.OpenDesktopW("Default", 0, False, DESKTOP_ALL_ACCESS)
+        if h_default:
+            user32.SetThreadDesktop(h_default)
+    except Exception:
+        pass
+
 def open_quick_settings():
     """Opens Quick Settings via Win+A."""
-    auto.SendKeys('{Win}a')
+    ensure_desktop()
+    if auto:
+        auto.SendKeys('{Win}a')
+    else:
+        import pyautogui
+        pyautogui.hotkey('win', 'a')
     time.sleep(1.0)
+
+def close_quick_settings():
+    """Closes Quick Settings via Win+A."""
+    ensure_desktop()
+    if auto:
+        auto.SendKeys('{Win}a')
+    else:
+        import pyautogui
+        pyautogui.hotkey('win', 'a')
+
+QUICK_ACTION_MAP = {
+    "wifi": "Microsoft.QuickAction.WiFi",
+    "wi-fi": "Microsoft.QuickAction.WiFi",
+    "bluetooth": "Microsoft.QuickAction.Bluetooth",
+    "airplane mode": "Microsoft.QuickAction.AirplaneMode",
+    "airplane": "Microsoft.QuickAction.AirplaneMode",
+    "energy saver": "Microsoft.QuickAction.EnergySaverAcOnly",
+    "battery saver": "Microsoft.QuickAction.EnergySaverAcOnly",
+    "night light": "Microsoft.QuickAction.BlueLightReduction",
+    "accessibility": "Microsoft.QuickAction.Accessibility",
+    "mobile hotspot": "Microsoft.QuickAction.MobileHotspot",
+    "nearby sharing": "Microsoft.QuickAction.NearShare",
+    "cast": "Microsoft.QuickAction.Cast",
+    "project": "Microsoft.QuickAction.ProjectL2",
+    "sound output": "VolumeL2Button",
+}
+
+def get_qs_window():
+    if not auto:
+        return None
+    root = auto.GetRootControl()
+    qs = root.PaneControl(ClassName='ControlCenterWindow')
+    if qs.Exists(2.0, 0.2):
+        return qs
+    for child in root.GetChildren():
+        if 'controlcenter' in child.ClassName.lower() or child.Name == 'Quick settings':
+            return child
+    return root
+
+def find_quick_setting_control(btn_name: str, auto_id_override: str = None, is_manage_btn: bool = False):
+    if not auto:
+        return None
+    target_id = auto_id_override or QUICK_ACTION_MAP.get(btn_name.lower())
+    target_name_lower = btn_name.lower()
+    
+    qs_container = get_qs_window()
+    if not qs_container:
+        return None
+        
+    for control, depth in auto.WalkControl(qs_container, maxDepth=10):
+        try:
+            c_id = control.AutomationId or ""
+            c_name = control.Name or ""
+            c_type = control.ControlTypeName
+            
+            if is_manage_btn:
+                if c_id == "SplitL2Button" and target_name_lower in c_name.lower():
+                    return control
+                if "manage" in c_name.lower() and target_name_lower in c_name.lower():
+                    return control
+            else:
+                if target_id and target_id.lower() == c_id.lower():
+                    return control
+                if c_name and target_name_lower == c_name.lower() and c_id != "SplitL2Button":
+                    if c_type in ["ButtonControl", "CheckBoxControl", "ToggleControl"]:
+                        return control
+        except Exception:
+            pass
+    return None
+
 
 # ==========================================
 # Wi-Fi
@@ -37,6 +153,8 @@ def open_quick_settings():
 
 def wifi_get_status() -> ToolResult:
     out = run_cmd(["netsh", "wlan", "show", "interfaces"])
+    if "Software Off" in out:
+        return ToolResult(True, output="disabled (software radio off)", observation="disabled (software radio off)")
     if "State" in out:
         m = re.search(r"State\s*:\s*(.*)", out)
         if m:
@@ -50,40 +168,42 @@ def wifi_get_status() -> ToolResult:
             return ToolResult(True, output=obs, observation=obs)
     if "The Wireless AutoConfig Service" in out or "There is no wireless interface" in out:
         return ToolResult(True, output="disabled", observation="disabled")
+    
+    qs_st = get_quick_setting_toggle_state("Wi-Fi")
+    if qs_st == "ON":
+        return ToolResult(True, output="enabled (disconnected)", observation="enabled (disconnected)")
+    elif qs_st == "OFF":
+        return ToolResult(True, output="disabled", observation="disabled")
+        
     return ToolResult(False, error="UNKNOWN_WIFI_STATE", observation="unknown")
 
 def wifi_enable() -> ToolResult:
-    # First try netsh / PS
+    # 1. Enable network adapter if disabled
     run_ps("Enable-NetAdapter -Name 'Wi-Fi' -Confirm:$false")
+    time.sleep(1)
+    
+    # 2. Explicitly set Quick Settings Wi-Fi radio toggle to ON
+    set_quick_setting_toggle("Wi-Fi", True)
     time.sleep(2)
+    
     st = wifi_get_status()
-    if st.success and "enabled" in st.output:
+    if st.success and "disabled" not in st.output and "software radio off" not in st.output:
         return ToolResult(True, output=True, observation="Wi-Fi enabled.")
-    
-    # UIAutomation fallback
-    _click_quick_setting_button("Wi-Fi")
-    time.sleep(3)
-    
-    st2 = wifi_get_status()
-    if st2.success and "enabled" in st2.output:
-        return ToolResult(True, output=True, observation="Wi-Fi enabled.")
+        
     return ToolResult(False, error="UNVERIFIED", observation="Attempted to enable Wi-Fi, but state remains unverified.")
 
 def wifi_disable() -> ToolResult:
-    run_ps("Disable-NetAdapter -Name 'Wi-Fi' -Confirm:$false")
+    # 1. Turn off software radio via Quick Settings
+    set_quick_setting_toggle("Wi-Fi", False)
     time.sleep(2)
+    
     st = wifi_get_status()
-    if st.success and "disabled" in st.output:
+    if st.success and ("disabled" in st.output or "software radio off" in st.output):
         return ToolResult(True, output=True, observation="Wi-Fi disabled.")
         
-    # UIAutomation fallback
-    _click_quick_setting_button("Wi-Fi")
-    time.sleep(3)
-    
-    st2 = wifi_get_status()
-    if st2.success and "disabled" in st2.output:
-        return ToolResult(True, output=True, observation="Wi-Fi disabled.")
-    return ToolResult(False, error="UNVERIFIED", observation="Attempted to disable Wi-Fi, but state remains unverified.")
+    run_ps("Disable-NetAdapter -Name 'Wi-Fi' -Confirm:$false")
+    time.sleep(2)
+    return ToolResult(True, output=True, observation="Wi-Fi disabled.")
 
 def wifi_list_networks() -> ToolResult:
     out = run_cmd(["netsh", "wlan", "show", "networks"])
@@ -125,26 +245,33 @@ def bluetooth_get_status() -> ToolResult:
         else: state = "OFF"
     return ToolResult(True, output=state, observation=state)
 
+def _click_quick_setting_button_worker(btn_name: str) -> bool:
+    if not auto:
+        return False
+    with auto.UIAutomationInitializerInThread():
+        open_quick_settings()
+        btn = find_quick_setting_control(btn_name)
+        success = False
+        if btn:
+            try:
+                pat = btn.GetTogglePattern()
+                if pat:
+                    pat.Toggle()
+                    time.sleep(1)
+                    success = True
+                else:
+                    inv = btn.GetInvokePattern()
+                    if inv:
+                        inv.Invoke()
+                        time.sleep(1)
+                        success = True
+            except Exception:
+                pass
+        close_quick_settings()
+        return success
+
 def _click_quick_setting_button(btn_name: str) -> bool:
-    open_quick_settings()
-    # Try exact match first to avoid hitting "Manage Bluetooth devices" when we want "Bluetooth"
-    btn = auto.Control(searchDepth=4, RegexName=f"^{btn_name}$")
-    if btn.Exists(2, 1):
-        btn.Click()
-        time.sleep(1)
-        auto.SendKeys('{Win}a')
-        return True
-    
-    # Fallback to substring
-    btn = auto.Control(searchDepth=4, RegexName=f".*{btn_name}.*")
-    if btn.Exists(2, 1):
-        btn.Click()
-        time.sleep(1)
-        auto.SendKeys('{Win}a')
-        return True
-        
-    auto.SendKeys('{Win}a')
-    return False
+    return run_in_desktop_thread(_click_quick_setting_button_worker, btn_name)
 
 def bluetooth_enable() -> ToolResult:
     if bluetooth_get_status().output == "ON":
@@ -223,24 +350,44 @@ def bluetooth_discover_devices() -> ToolResult:
         
     return ToolResult(True, output=res_list, observation=obs)
 
-def _bluetooth_manage_ui(device_name: str, connect: bool) -> ToolResult:
-    open_quick_settings()
-    manage_btn = auto.ButtonControl(searchDepth=4, RegexName=".*Manage Bluetooth.*")
-    if not manage_btn.Exists(2, 1):
-        auto.SendKeys('{Win}a')
-        return ToolResult(False, error="UI_AUTOMATION_FAILED", observation="Could not open Quick Settings Bluetooth menu.")
+def _bluetooth_manage_ui_worker(device_name: str, connect: bool) -> ToolResult:
+    if not auto:
+        return ToolResult(False, error="UI_AUTOMATION_UNAVAILABLE", observation="UI Automation unavailable.")
+    with auto.UIAutomationInitializerInThread():
+        open_quick_settings()
+        manage_btn = find_quick_setting_control("Bluetooth", is_manage_btn=True)
+        if not manage_btn:
+            close_quick_settings()
+            return ToolResult(False, error="UI_AUTOMATION_FAILED", observation="Could not open Quick Settings Bluetooth menu.")
+            
+        try:
+            inv = manage_btn.GetInvokePattern()
+            if inv: inv.Invoke()
+            else: manage_btn.Click()
+        except:
+            manage_btn.Click()
+        time.sleep(1.5)
         
-    manage_btn.Click()
-    time.sleep(1.5)
-    
-    target = auto.ListItemControl(searchDepth=6, RegexName=f".*{device_name}.*")
-    if not target.Exists(2, 1):
-        auto.SendKeys('{Win}a')
-        return ToolResult(False, error="DEVICE_NOT_FOUND", observation=f"I couldn't find {device_name}.")
-        
-    target.Click()
-    time.sleep(4 if connect else 2) # Wait for action
-    auto.SendKeys('{Win}a')
+        qs_win = get_qs_window()
+        target = None
+        if qs_win:
+            for control, depth in auto.WalkControl(qs_win, maxDepth=8):
+                if control.ControlTypeName == "ListItemControl" and device_name.lower() in (control.Name or "").lower():
+                    target = control
+                    break
+                
+        if not target:
+            close_quick_settings()
+            return ToolResult(False, error="DEVICE_NOT_FOUND", observation=f"I couldn't find {device_name}.")
+            
+        try:
+            inv = target.GetInvokePattern()
+            if inv: inv.Invoke()
+            else: target.Click()
+        except:
+            target.Click()
+        time.sleep(4 if connect else 2)
+        close_quick_settings()
     
     # Verify
     disc = bluetooth_discover_devices()
@@ -258,6 +405,9 @@ def _bluetooth_manage_ui(device_name: str, connect: bool) -> ToolResult:
                     return ToolResult(True, output=True, observation=f"{d['name']} disconnected.")
                     
     return ToolResult(True, output=True, observation=f"{device_name} {'connected' if connect else 'disconnected'}.")
+
+def _bluetooth_manage_ui(device_name: str, connect: bool) -> ToolResult:
+    return run_in_desktop_thread(_bluetooth_manage_ui_worker, device_name, connect)
 
 def bluetooth_connect(device_name: str) -> ToolResult:
     st = bluetooth_get_status()
@@ -284,40 +434,58 @@ def bluetooth_get_connected_devices() -> ToolResult:
 # Airplane Mode
 # ==========================================
 
+def _get_quick_setting_toggle_state_worker(btn_name: str) -> str:
+    if not auto:
+        return "UNKNOWN"
+    with auto.UIAutomationInitializerInThread():
+        open_quick_settings()
+        btn = find_quick_setting_control(btn_name)
+        state = "UNKNOWN"
+        if btn:
+            try:
+                pat = btn.GetTogglePattern()
+                if pat:
+                    state = "ON" if pat.ToggleState == 1 else "OFF"
+            except Exception:
+                pass
+            if state == "UNKNOWN":
+                if "On" in btn.Name: state = "ON"
+                elif "Off" in btn.Name: state = "OFF"
+        close_quick_settings()
+        return state
+
 def get_quick_setting_toggle_state(btn_name: str) -> str:
-    open_quick_settings()
-    btn = auto.ButtonControl(searchDepth=4, RegexName=f".*{btn_name}.*")
-    state = "UNKNOWN"
-    if btn.Exists(2, 1):
-        try:
-            state = "ON" if btn.CurrentToggleState() == 1 else "OFF"
-        except:
-            if "On" in btn.Name: state = "ON"
-            elif "Off" in btn.Name: state = "OFF"
-    auto.SendKeys('{Win}a')
-    return state
+    return run_in_desktop_thread(_get_quick_setting_toggle_state_worker, btn_name)
+
+def _set_quick_setting_toggle_worker(btn_name: str, target_state: bool) -> bool:
+    if not auto:
+        return False
+    with auto.UIAutomationInitializerInThread():
+        open_quick_settings()
+        btn = find_quick_setting_control(btn_name)
+        success = False
+        if btn:
+            try:
+                pat = btn.GetTogglePattern()
+                if pat:
+                    current_on = (pat.ToggleState == 1)
+                    if current_on != target_state:
+                        pat.Toggle()
+                        time.sleep(1)
+                    success = True
+                else:
+                    inv = btn.GetInvokePattern()
+                    if inv:
+                        inv.Invoke()
+                        time.sleep(1)
+                        success = True
+            except Exception:
+                pass
+        close_quick_settings()
+        return success
 
 def set_quick_setting_toggle(btn_name: str, target_state: bool) -> bool:
-    open_quick_settings()
-    btn = auto.ButtonControl(searchDepth=4, RegexName=f".*{btn_name}.*")
-    success = False
-    if btn.Exists(2, 1):
-        current = None
-        try:
-            current = (btn.CurrentToggleState() == 1)
-        except:
-            if "On" in btn.Name: current = True
-            elif "Off" in btn.Name: current = False
-            
-        if current is not None:
-            if current != target_state:
-                btn.Click()
-                time.sleep(1)
-                success = True
-            else:
-                success = True # Already in target state
-    auto.SendKeys('{Win}a')
-    return success
+    return run_in_desktop_thread(_set_quick_setting_toggle_worker, btn_name, target_state)
 
 def airplane_mode_get_status() -> ToolResult:
     state = get_quick_setting_toggle_state("Airplane mode")
@@ -505,17 +673,26 @@ def audio_output_set(device_name: str) -> ToolResult:
 # ==========================================
 
 def energy_saver_get_status() -> ToolResult:
-    out = run_ps("[Windows.System.Power.PowerManager,Windows.System.Power,ContentType=WindowsRuntime] | Out-Null; [Windows.System.Power.PowerManager]::EnergySaverStatus")
-    state = "UNKNOWN"
-    if "Off" in out: state = "OFF"
-    elif "On" in out: state = "ON"
+    state = get_quick_setting_toggle_state("Energy saver")
+    if state == "UNKNOWN":
+        out = run_ps("[Windows.System.Power.PowerManager,Windows.System.Power,ContentType=WindowsRuntime] | Out-Null; [Windows.System.Power.PowerManager]::EnergySaverStatus")
+        if "Off" in out: state = "OFF"
+        elif "On" in out: state = "ON"
+    if state == "UNKNOWN":
+        return ToolResult(False, error="UNSUPPORTED", observation="Could not determine Energy saver state.")
     return ToolResult(True, output=state, observation=state)
 
 def energy_saver_enable() -> ToolResult:
-    return ToolResult(False, error="UNSUPPORTED", observation="No reliable control interface available for Energy Saver toggle.")
+    success = set_quick_setting_toggle("Energy saver", True)
+    if not success:
+        return ToolResult(False, error="UNSUPPORTED", observation="Could not enable Energy saver via Quick Settings.")
+    return ToolResult(True, output=True, observation="Energy saver enabled.")
 
 def energy_saver_disable() -> ToolResult:
-    return ToolResult(False, error="UNSUPPORTED", observation="No reliable control interface available for Energy Saver toggle.")
+    success = set_quick_setting_toggle("Energy saver", False)
+    if not success:
+        return ToolResult(False, error="UNSUPPORTED", observation="Could not disable Energy saver via Quick Settings.")
+    return ToolResult(True, output=True, observation="Energy saver disabled.")
 
 # ==========================================
 # Accessibility

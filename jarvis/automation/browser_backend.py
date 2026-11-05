@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 import subprocess
 from typing import Dict, Any, List, Optional
 from .base import AutomationBackend, Observation
@@ -63,13 +64,59 @@ async def _try_attach_to_chrome(playwright, user_data_dir: str, timeout_ms: int 
     return None
 
 
+def _installed_browser_path(preferred: Optional[str] = None) -> Optional[str]:
+    """Resolve a branded system browser; never fall back to Playwright Chromium."""
+    local = os.environ.get("LOCALAPPDATA", "")
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    candidates = {
+        "chrome": [
+            os.path.join(program_files, "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(program_files_x86, "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+            shutil.which("chrome"),
+        ],
+        "edge": [
+            os.path.join(program_files, "Microsoft", "Edge", "Application", "msedge.exe"),
+            os.path.join(program_files_x86, "Microsoft", "Edge", "Application", "msedge.exe"),
+            os.path.join(local, "Microsoft", "Edge", "Application", "msedge.exe"),
+            shutil.which("msedge"),
+        ],
+        "brave": [
+            os.path.join(program_files, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+            os.path.join(program_files_x86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+            os.path.join(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+            shutil.which("brave"),
+        ],
+    }
+    order = [preferred] if preferred in candidates else []
+    order.extend(name for name in ("chrome", "edge", "brave") if name not in order)
+    for name in order:
+        for path in candidates[name]:
+            if path and os.path.isfile(path):
+                return path
+    return None
+
+
 def _chrome_exe_path() -> str:
-    candidates = [
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        "chrome.exe",
-    ]
-    return next((p for p in candidates if os.path.exists(p)), "chrome.exe")
+    # Kept for callers that explicitly request Chrome; the resolver may still
+    # select Edge/Brave as a compatible Chromium fallback.
+    return _installed_browser_path("chrome") or ""
+
+
+def _system_browser_launch_options(preferred: str) -> Dict[str, Any]:
+    executable_path = _installed_browser_path(preferred)
+    if not executable_path:
+        raise RuntimeError(
+            "Dexget could not find Chrome, Edge, or Brave. Install one of these browsers "
+            "and restart Dexget; Playwright's private Chromium is not required."
+        )
+    return {
+        "headless": False,
+        "executable_path": executable_path,
+        "args": ["--no-first-run", "--no-default-browser-check"],
+        "ignore_default_args": ["--enable-automation", "--no-sandbox"],
+    }
 
 
 class BrowserUseBackend(AutomationBackend):
@@ -119,7 +166,14 @@ class BrowserUseBackend(AutomationBackend):
         url: Optional[str] = None,
     ):
         if self.playwright:
-            return
+            if self.external_browser:
+                return
+            try:
+                if self.page and not self.page.is_closed():
+                    return
+            except Exception:
+                pass
+            await self._dispose_session(stop_playwright=True)
 
         from playwright.async_api import async_playwright
         self.playwright = await async_playwright().start()
@@ -141,6 +195,11 @@ class BrowserUseBackend(AutomationBackend):
         profile_dir: str,
         url: Optional[str],
     ):
+        session_mode = os.environ.get("JARVIS_BROWSER_SESSION_MODE", "dedicated").lower()
+        if session_mode != "attach":
+            await self._init_dedicated_profile_browser(browser_exec, profile_dir, url)
+            return
+
         from jarvis.tasks.account_discovery import get_browser_user_data_dir
 
         user_data_dir = get_browser_user_data_dir(browser_exec or "chrome")
@@ -188,11 +247,12 @@ class BrowserUseBackend(AutomationBackend):
                 "  [CDP] Note: Connection timed out. Chrome's remote debugging "
                 "requires chrome://inspect to be open for external connections."
             )
-        exe_path = (
-            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
-            if browser_exec == "brave"
-            else _chrome_exe_path()
-        )
+        exe_path = _installed_browser_path((browser_exec or "chrome").lower())
+        if not exe_path:
+            raise RuntimeError(
+                "Dexget could not find Chrome, Edge, or Brave. Install one of these browsers "
+                "and restart Dexget; Playwright's private Chromium is not required."
+            )
         cmd = [exe_path, f"--profile-directory={profile_dir}"]
         if url:
             cmd.append(url)
@@ -202,6 +262,41 @@ class BrowserUseBackend(AutomationBackend):
         self.context = None
         self.page = None
         self.connection_state[BrowserConnectionState.SESSION_ATTACHED] = False
+
+    async def _init_dedicated_profile_browser(
+        self,
+        browser_exec: Optional[str],
+        profile_dir: str,
+        url: Optional[str],
+    ):
+        """Launch a reusable automation profile without CDP consent prompts."""
+        browser_name = (browser_exec or "chrome").lower()
+        safe_profile = "".join(c if c.isalnum() or c in "-_" else "_" for c in (profile_dir or "Default"))
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        user_data_dir = os.path.join(base, "JarvisAgent", "browser-automation", f"{browser_name}-{safe_profile}")
+        os.makedirs(user_data_dir, exist_ok=True)
+
+        executable_path = _installed_browser_path(browser_name)
+        if not executable_path:
+            raise RuntimeError(
+                "Dexget could not find Chrome, Edge, or Brave. Install one of these browsers "
+                "and restart Dexget; Playwright's private Chromium is not required."
+            )
+        self.context = await self.playwright.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            executable_path=executable_path,
+            headless=False,
+            args=["--no-first-run", "--no-default-browser-check", "--disable-infobars"],
+            ignore_default_args=["--enable-automation", "--no-sandbox"],
+        )
+        self.browser = None
+        self.external_browser = False
+        self.connection_state[BrowserConnectionState.PROFILE_EXISTS] = True
+        self.connection_state[BrowserConnectionState.CHROME_RUNNING] = True
+        self.connection_state[BrowserConnectionState.REMOTE_DEBUG_ENABLED] = False
+        self.connection_state[BrowserConnectionState.SESSION_DETECTED] = True
+        self.connection_state[BrowserConnectionState.SESSION_ATTACHED] = True
+        self.page = await self._find_or_create_page(url)
 
     async def _find_or_create_page(self, url: Optional[str]):
         if not self.context:
@@ -227,7 +322,9 @@ class BrowserUseBackend(AutomationBackend):
         return await self.context.new_page()
 
     async def _init_generic_browser(self, url: Optional[str]):
-        self.browser = await self.playwright.chromium.launch(headless=False)
+        preferred = os.environ.get("JARVIS_BROWSER", "chrome").lower()
+        self.browser = await self.playwright.chromium.launch(
+            **_system_browser_launch_options(preferred))
         self.context = await self.browser.new_context()
         self.page = await self.context.new_page()
         self.external_browser = False
@@ -402,6 +499,20 @@ class BrowserUseBackend(AutomationBackend):
             await self._update_state()
             return True
         except Exception as e:
+            message = str(e).lower()
+            if "closed" in message or "target page" in message or "target context" in message:
+                try:
+                    await self._dispose_session(stop_playwright=True)
+                    await self._init_browser(browser_exec=browser_exec, profile_dir=profile_dir, url=None)
+                    if self.external_browser:
+                        return True
+                    if self.page:
+                        await self.page.goto(url, wait_until="domcontentloaded")
+                        await self._update_state()
+                        return True
+                except Exception as retry_error:
+                    print(f"Navigate retry failed: {retry_error}")
+                    return False
             print(f"Navigate failed: {e}")
             return False
 
@@ -429,19 +540,30 @@ class BrowserUseBackend(AutomationBackend):
         obs = self.observe()
         return expected_condition.lower() in obs.text_representation.lower()
 
-    async def async_cancel(self):
+    async def _dispose_session(self, stop_playwright: bool = False):
+        if self.context:
+            try:
+                await self.context.close()
+            except Exception:
+                pass
+            self.context = None
         if self.browser:
             try:
                 await self.browser.close()
             except Exception:
                 pass
             self.browser = None
-        if self.playwright:
+        self.page = None
+        self.external_browser = False
+        if stop_playwright and self.playwright:
             try:
                 await self.playwright.stop()
             except Exception:
                 pass
             self.playwright = None
+
+    async def async_cancel(self):
+        await self._dispose_session(stop_playwright=True)
 
     def cancel(self):
         try:

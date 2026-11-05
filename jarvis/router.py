@@ -483,6 +483,7 @@ def _try_youtube(cmd: str) -> Optional[RouteResult]:
 def _try_youtube_music(cmd: str) -> Optional[RouteResult]:
     """'play X in youtube music', 'youtube music X', 'search X on youtube music'"""
     patterns = [
+        r"^(?:open|go\s+to|launch)\s+youtube\s+music\s+and\s+(?:play|listen\s+to|search(?:\s+for)?)\s+(.+?)[\s.!]*$",
         r"^play\s+(.+?)\s+(?:in|on)\s+youtube\s+music$",
         r"^(?:search|find|look\s+up)\s+(.+?)\s+(?:in|on)\s+youtube\s+music$",
         r"^youtube\s+music\s+(?:search\s+for\s+|play\s+|search\s+)?(.+)$",
@@ -694,7 +695,7 @@ def _try_volume(cmd: str) -> Optional[RouteResult]:
 
 
 def _try_power(cmd: str) -> Optional[RouteResult]:
-    """'shutdown', 'restart', 'sleep'"""
+    """Power/session controls and Windows power plans."""
     if re.match(
         r"^(?:shut\s*down|shutdown|power\s*off|turn\s+off\s+(?:my\s+|the\s+)?(?:pc|computer|laptop))[\s.!]*$",
         cmd, re.IGNORECASE,
@@ -710,6 +711,14 @@ def _try_power(cmd: str) -> Optional[RouteResult]:
         cmd, re.IGNORECASE,
     ):
         return _windows("win_sleep", {}, "Putting PC to sleep")
+    if re.match(r"^(?:sign\s*out|log\s*off)(?:\s+(?:of\s+)?(?:windows|my\s+(?:pc|computer|laptop)))?[\s.!]*$", cmd, re.IGNORECASE):
+        return _windows("win_sign_out", {}, "Signing out of Windows")
+    m = re.match(r"^(?:switch|change|set)\s+(?:the\s+)?(?:power\s+)?(?:(?:mode|plan)\s+)?(?:to\s+)?(balanced|performance|high\s+performance|low|power\s+saver|battery\s+saver)(?:\s+(?:mode|plan))?[\s.!]*$", cmd, re.IGNORECASE)
+    if m:
+        mode = m.group(1)
+        return _windows("win_set_power_mode", {"mode": mode}, f"Switching to {mode} power mode")
+    if re.match(r"^(?:get|show|what(?:'s| is))\s+(?:the\s+|my\s+)?(?:current\s+)?power\s+(?:mode|plan)[\s?!.]*$", cmd, re.IGNORECASE):
+        return _windows("win_get_power_mode", {}, "Getting current power mode")
     return None
 
 def _try_system_info(cmd: str) -> Optional[RouteResult]:
@@ -754,6 +763,7 @@ def _try_filesystem(cmd: str) -> Optional[RouteResult]:
             "location": intent.location,
             "location_type": intent.location_type,
             "action": intent.action,
+            "destination": intent.destination,
             "original_cmd": cmd
         },
         label=f"Filesystem: {intent.action} {intent.target_name or ''}"
@@ -784,15 +794,19 @@ def _try_browser_search_and_play(cmd: str) -> Optional[RouteResult]:
     return None
 
 def _try_settings(cmd: str) -> Optional[RouteResult]:
-    m = re.match(r"^open\s+(?:windows\s+)?settings(?:[\s.!]*)$", cmd, re.IGNORECASE)
+    m = re.match(r"^open\s+(?:windows\s+)?settings[\s.!]*$", cmd, re.IGNORECASE)
     if m:
-        return _application("win_open_application", {"app_name": "ms-settings:"}, "Opening Windows Settings")
-    
-    # If they say something like "open settings and go to sign in"
-    m = re.match(r"^open\s+(?:windows\s+)?settings\s+(.*)$", cmd, re.IGNORECASE)
+        return _windows("win_open_settings", {"page": "home"}, "Opening Windows Settings")
+
+    m = re.match(r"^open\s+(?:windows\s+)?settings(?:\s+(?:for|to|and\s+go\s+to))?\s+(.+?)[\s.!]*$", cmd, re.IGNORECASE)
     if m:
-        # Return a chat response directly bypassing agent
-        return RouteResult(RouteType.CHAT, text="Which settings do you mean — Windows settings or an app's settings?")
+        page = m.group(1).strip()
+        return _windows("win_open_settings", {"page": page}, f"Opening {page} settings")
+
+    m = re.match(r"^open\s+(.+?)\s+settings[\s.!]*$", cmd, re.IGNORECASE)
+    if m:
+        page = m.group(1).strip()
+        return _windows("win_open_settings", {"page": page}, f"Opening {page} settings")
 
     return None
 
@@ -852,10 +866,6 @@ def _try_compound_workflow(cmd: str) -> Optional[RouteResult]:
     return RouteResult(RouteType.AGENT, label="COMPOUND_WORKFLOW", text=json.dumps(structure))
 
 def _try_unsupported_actions(cmd: str) -> Optional[RouteResult]:
-    # System modes
-    if re.match(r"^(?:switch|change|set)\s+(?:to\s+)?(?:performance|battery|power saving|balanced)\s+mode[\s.!]*$", cmd, re.IGNORECASE):
-        return RouteResult(RouteType.AGENT, label="Windows workflow")
-    
     # Discord actions that are unsupported
     if "discord" in cmd.lower() and ("join" in cmd.lower() or "call" in cmd.lower() or "camera" in cmd.lower() or "mute" in cmd.lower() or "server" in cmd.lower()):
         return RouteResult(RouteType.AGENT, label="Desktop workflow")
@@ -938,24 +948,80 @@ def _try_system_control(cmd: str) -> Optional[RouteResult]:
 
     return None
 
+
+def _try_remote_server(cmd: str) -> Optional[RouteResult]:
+    """Deterministic controls for the fixed Tailscale host ashwin_server."""
+    lowered = cmd.lower().strip(" .!?")
+    server_ref = r"(?:ashwin[_ ]?server|ashwinserver|the server|server)"
+
+    if re.fullmatch(rf"(?:check|ping|connect to|test)(?: the)? {server_ref}", lowered):
+        return _fast("server_ping", {}, "Checking ashwin_server")
+
+    if re.fullmatch(rf"(?:(?:show|get|check) )?(?:status|health|stats|monitoring|system stats)(?: (?:of|for|on))? {server_ref}", lowered) or \
+       re.fullmatch(rf"(?:(?:show|get|check) )?(?:cpu|memory|ram|disk|temperature|battery|uptime)(?: (?:of|for|on))? {server_ref}", lowered):
+        return _fast("server_monitor", {}, "Reading ashwin_server health")
+
+    if re.fullmatch(rf"(?:(?:show|list|get) )?(?:docker )?containers?(?: (?:on|in))? {server_ref}", lowered) or \
+       re.fullmatch(rf"(?:(?:show|get|check) )?docker (?:status|ps)(?: (?:on|in))? {server_ref}", lowered):
+        return _fast("server_docker_list", {}, "Listing ashwin_server containers")
+
+    m = re.fullmatch(rf"(?:(?:show|get|read) )?(?:docker )?logs (?:for |of )?([a-z0-9_.@-]+)(?: (?:on|in))? {server_ref}", lowered)
+    if m:
+        return _fast("server_docker_logs", {"container": m.group(1)}, f"Reading {m.group(1)} container logs")
+
+    m = re.fullmatch(rf"(start|stop|restart) (?:docker )?(?:container )?([a-z0-9_.@-]+)(?: (?:on|in))? {server_ref}", lowered)
+    if m:
+        return _fast("server_docker_action", {"action": m.group(1), "container": m.group(2)}, f"{m.group(1).title()}ing {m.group(2)}")
+
+    m = re.fullmatch(rf"(?:(?:show|get|check) )?(?:systemd )?(?:service )?([a-z0-9_.@-]+) status(?: (?:on|in))? {server_ref}", lowered)
+    if not m:
+        m = re.fullmatch(rf"(?:(?:show|get|check) )?(?:status of )?(?:systemd )?(?:service )([a-z0-9_.@-]+)(?: (?:on|in))? {server_ref}", lowered)
+    if m:
+        return _fast("server_service_status", {"service": m.group(1)}, f"Checking {m.group(1)} service")
+
+    m = re.fullmatch(rf"(?:(?:show|get|read) )?(?:systemd )?(?:service )?logs (?:for |of )?([a-z0-9_.@-]+)(?: (?:on|in))? {server_ref}", lowered)
+    if m:
+        return _fast("server_service_logs", {"service": m.group(1)}, f"Reading {m.group(1)} service logs")
+
+    m = re.fullmatch(rf"(?:run|execute) (?:command )?(.+?) (?:on|in) {server_ref}", cmd.strip(), re.IGNORECASE)
+    if m:
+        return _fast("server_terminal", {"command": m.group(1).strip()}, "Running an approved remote command")
+
+    m = re.fullmatch(rf"(reboot|shutdown|shut down|power off) {server_ref}", lowered)
+    if m:
+        action = "reboot" if m.group(1) == "reboot" else "shutdown"
+        return _fast("server_power", {"action": action}, f"Confirm {action} of ashwin_server")
+
+    return None
+
 _CHAIN = [
+    # Tailscale-only remote server controls must be recognized before local
+    # application, filesystem, network, and power routes.
+    _try_remote_server,
+
     # 0. Unsupported actions
     _try_unsupported_actions,
     
     # 1. memory/preference/ingestion
     _try_memory,
     _try_document_ingestion,
+
+    # Explicit YouTube Music wording must win before the compound-workflow
+    # parser or generic music semantics can reduce it to regular YouTube.
+    _try_youtube_music,
     
     # 2. Advanced workflows/browsers (MUST be before filesystem)
     _try_compound_workflow,
     _try_browser_advanced,
     _try_open_and_type,
+    _try_settings,
     _try_open_app,
     _try_close_app,
     
     # 3. browser routes (Check for sites before filesystem catches them as folders)
     _try_browser_search_and_play,
-    _try_youtube_music,
+    # Local episode/file phrasing must be checked before generic media search.
+    _try_local_media,
     _try_youtube,
     _try_open_site,
     _try_search,
@@ -963,13 +1029,9 @@ _CHAIN = [
     # 4. filesystem
     _try_filesystem,
     
-    # 5. local media
-    _try_local_media,
-    
-    # 6. Windows/system
+    # 5. Windows/system
     _try_system_control,
     _try_lock,
-    _try_settings,
     _try_brightness,
     _try_volume,
     _try_power,

@@ -50,12 +50,25 @@ def _make_ollama_fn(model: str = "gemma3:4b", host: str = "http://localhost:1143
     import json as _json
 
     def _call(prompt: str, schema=None) -> Optional[str]:
+        from jarvis.model_runtime import ensure_model_ready
+        runtime = ensure_model_ready(warm=False)
+        if not runtime.ready:
+            from jarvis.model_runtime import release_model
+            release_model(model, stop_server=True)
+            raise ModelUnavailable(
+                f"Local model '{model}' could not start on demand. {runtime.error or ''}".strip()
+            )
         try:
             body = {
                 "model": model,
                 "prompt": prompt,
                 "stream": schema is not None,
-                "options": {"temperature": 0, "num_ctx": 16384, "num_predict": 1024},
+                "keep_alive": os.getenv("JARVIS_OLLAMA_TASK_KEEP_ALIVE", "5m"),
+                "options": {
+                    "temperature": float(os.getenv("JARVIS_LLM_TEMPERATURE", "0.5")),
+                    "num_ctx": int(os.getenv("JARVIS_OLLAMA_NUM_CTX", "4096")),
+                    "num_predict": int(os.getenv("JARVIS_OLLAMA_NUM_PREDICT", "768")),
+                },
             }
             if schema is not None:
                 body["format"] = schema
@@ -129,6 +142,7 @@ def _make_openai_fn(api_key: Optional[str] = None, model: str = "gpt-4o-mini") -
             payload = _json.dumps({
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
+                "temperature": float(os.getenv("JARVIS_LLM_TEMPERATURE", "0.5")),
             }).encode()
             req = urllib.request.Request(
                 "https://api.openai.com/v1/chat/completions",
@@ -282,6 +296,13 @@ def handle_command(agent: Agent, command: str, *, reset_cancel: bool = True) -> 
         return AgentResponse(str(exc), False)
     finally:
         agent.command_lock.release()
+        # No-op for deterministic tasks. If this task used Ollama, unload its
+        # weights and terminate the server process started by Dexget.
+        try:
+            from jarvis.model_runtime import release_model
+            release_model(stop_server=True)
+        except Exception:
+            pass
 
 
 def _handle_command(agent: Agent, command: str) -> AgentResponse:
@@ -306,34 +327,30 @@ def _handle_command(agent: Agent, command: str) -> AgentResponse:
 
     # If deterministic route is AGENT (meaning complex or unknown), try semantic classifier
     if route_res.route_type == RouteType.AGENT:
-        from jarvis.semantic.classifier import classify_intent, Intent
-        if agent.executor.on_progress:
-            agent.executor.on_progress("[SEMANTIC CLASSIFIER] Analyzing intent...")
-            
-        intent_data = classify_intent(command, agent.llm_fn)
-        
-        if intent_data.intent != Intent.UNKNOWN:
+        from jarvis.semantic.jev_router import evaluate_jev
+
+        jev_mode = os.environ.get("JARVIS_JEV_MODE", "shadow").lower()
+        jev_is_active = jev_mode == "active" and bool(os.environ.get("TYPESAFE_API_KEY", "").strip())
+        jev_decision, jev_route = evaluate_jev(command)
+        if jev_route is not None:
+            route_res = jev_route
+            if agent.executor.on_progress and jev_decision is not None:
+                agent.executor.on_progress(
+                    f"[JEV] {jev_decision.intent.value} ({jev_decision.confidence:.0%})"
+                )
+        elif not jev_is_active:
+            # No active JEV service: use the local structured classifier as a
+            # compatibility fallback. Deterministic routes never pay this cost.
+            from jarvis.semantic.local_router import route_natural_language
             if agent.executor.on_progress:
-                agent.executor.on_progress(f"[SEMANTIC CLASSIFIER] Found {intent_data.intent.value}")
-                
-                
-            from jarvis.router import RouteResult, _fast, _browser, _windows
-            if intent_data.intent == Intent.BROWSER_RESEARCH:
-                if not intent_data.topic or intent_data.topic.lower() in ["none", "null", ""]:
-                    route_res = RouteResult(RouteType.CHAT, text="Sure. What would you like me to research?")
-                else:
-                    route_res = _fast("win_browser_search", {"browser": intent_data.browser or "chrome", "profile": "default", "query": intent_data.topic}, f"Researching {intent_data.topic}")
-            elif intent_data.intent == Intent.BROWSER_OPEN:
-                route_res = _windows("win_open_application", {"app_name": intent_data.browser or intent_data.application or "chrome"}, "Opening browser")
-            elif intent_data.intent == Intent.MUSIC_PLAY:
-                if intent_data.query and intent_data.query.lower() not in ["none", "null", ""]:
-                    # YOUTUBE_PLAY task
-                    route_res = RouteResult(RouteType.TASK, tool_name="youtube_play", tool_args={"query": intent_data.query}, label=f"Playing {intent_data.query}")
-            elif intent_data.intent == Intent.APPLICATION_OPEN:
-                if intent_data.application and intent_data.application.lower() not in ["none", "null", ""]:
-                    route_res = _windows("win_open_application", {"app_name": intent_data.application}, f"Opening {intent_data.application}")
-            elif intent_data.intent == Intent.TIMEOUT:
-                route_res = RouteResult(RouteType.CHAT, text="The local AI model is currently busy or taking too long to respond. Please try a simpler command or wait a moment.")
+                agent.executor.on_progress("[SEMANTIC] Understanding natural language...")
+            # Run only zero-latency local heuristics here. If they do not
+            # recognize the request, let the full agent make one model call;
+            # a separate short-timeout classifier would duplicate work and
+            # is especially slow on CPU-only ARM64 machines.
+            semantic_route = route_natural_language(command, None)
+            if semantic_route is not None:
+                route_res = semantic_route
 
     fast_routes = {
         RouteType.FAST, RouteType.WINDOWS, RouteType.APPLICATION, 

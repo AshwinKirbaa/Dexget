@@ -96,9 +96,18 @@ def test_routing_invalid_application():
     assert res.tool_args["app_name"] == "application_that_does_not_exist"
     
 def test_routing_system():
-    # 11. switch to performance mode
+    # 11. switch to performance mode uses the deterministic Windows tool
     res = route(CommandNormalizer.normalize("switch to performance mode"))
-    assert res.route_type == RouteType.AGENT
+    assert res.route_type == RouteType.WINDOWS
+    assert res.tool_name == "win_set_power_mode"
+    assert res.tool_args["mode"] == "performance"
+
+    res = route(CommandNormalizer.normalize("sign out of windows"))
+    assert res.tool_name == "win_sign_out"
+
+    res = route(CommandNormalizer.normalize("open display settings"))
+    assert res.tool_name == "win_open_settings"
+    assert res.tool_args["page"] == "display"
 
 def test_routing_knowledge():
     # 12. what is RAG
@@ -179,3 +188,9 @@ def test_routing_youtube_music_and_local():
     assert res.route_type == RouteType.TASK
     assert res.tool_name == "youtube_music_play"
     assert res.tool_args["query"] == "arijit singh"
+
+    # Explicit app-first wording must not fall through to generic YouTube.
+    res = route(CommandNormalizer.normalize("open youtube music and play Purpose Is Glorious"))
+    assert res.route_type == RouteType.TASK
+    assert res.tool_name == "youtube_music_play"
+    assert res.tool_args["query"] == "purpose is glorious"

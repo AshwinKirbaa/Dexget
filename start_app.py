@@ -1,61 +1,11 @@
 import os
-import subprocess
-import time
-import urllib.request
-import urllib.error
-import atexit
 import sys
 
-def is_ollama_running():
-    try:
-        response = urllib.request.urlopen("http://127.0.0.1:11434/", timeout=1)
-        return response.getcode() == 200
-    except:
-        return False
-
 def main():
-    ollama_process = None
-    
-    if not is_ollama_running():
-        # Check current directory for ollama.exe
-        ollama_exe = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ollama.exe')
-        
-        # Fallback to launcher.py's AppData location if not in current directory
-        if not os.path.exists(ollama_exe):
-            appdata = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
-            ollama_exe = os.path.join(appdata, 'JarvisAgent', 'ollama', 'ollama.exe')
-            
-        if os.path.exists(ollama_exe):
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
-            
-            ollama_process = subprocess.Popen(
-                [ollama_exe, "serve"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                startupinfo=startupinfo,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            
-            # Wait for Ollama to be ready
-            for _ in range(30):
-                time.sleep(0.5)
-                if is_ollama_running():
-                    break
-
-    def cleanup():
-        if ollama_process:
-            ollama_process.terminate()
-            try:
-                ollama_process.wait(timeout=3)
-            except:
-                ollama_process.kill()
-
-    atexit.register(cleanup)
-    
     # Launch the PyQt GUI
     try:
+        from jarvis.config.environment import load_environment
+        load_environment()
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtNetwork import QLocalSocket, QLocalServer
         
@@ -71,8 +21,10 @@ def main():
             socket.flush()
             socket.waitForBytesWritten(1000)
             sys.exit(0)
-            
-        print("[JARVIS COPILOT] Provider initialized")
+
+        # Ollama is intentionally not started here. Model-backed questions start
+        # it on demand and unload/terminate it immediately after the response.
+        print("[JARVIS COPILOT] Provider initialized (Ollama: on demand)")
         
         server = QLocalServer()
         server.removeServer("JarvisWidgetInstance")
@@ -87,12 +39,10 @@ def main():
                 msg = client.readAll().data().decode('utf-8')
                 if msg == "ACTIVATE":
                     print("[JARVIS COPILOT] Activation received")
-                    print("[JARVIS COPILOT] Focusing widget")
+                    print("[JARVIS COPILOT] Expanding dynamic island")
                     if ex.isMinimized():
                         ex.showNormal()
-                    ex.show()
-                    ex.raise_()
-                    ex.activateWindow()
+                    ex.activate_island()
                     
         server.newConnection.connect(new_connection)
         
@@ -100,7 +50,6 @@ def main():
         sys.exit(app.exec())
     except Exception as e:
         import traceback
-        import os
         appdata = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
         log_dir = os.path.join(appdata, 'JarvisAgent')
         os.makedirs(log_dir, exist_ok=True)
@@ -108,6 +57,9 @@ def main():
         with open(log_path, "w") as f:
             f.write(f"Error starting Jarvis Widget:\n{e}\n\n")
             traceback.print_exc(file=f)
+        print(f"Error starting Jarvis Widget: {e}", file=sys.stderr)
+        print(f"Crash details were written to {log_path}", file=sys.stderr)
+        raise
 
 if __name__ == "__main__":
     main()

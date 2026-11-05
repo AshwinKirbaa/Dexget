@@ -148,12 +148,14 @@ def test_ollama_action_request_uses_json_mode():
     from jarvis_integration import _make_ollama_fn
     response = Mock()
     response.read.return_value = b'{"response":"{\\"action\\":\\"TASK_COMPLETE\\"}"}'
-    with patch("urllib.request.urlopen") as urlopen:
+    with patch("jarvis.model_runtime.ensure_model_ready", return_value=Mock(ready=True)), \
+         patch("urllib.request.urlopen") as urlopen:
         urlopen.return_value.__enter__.return_value = response
         _make_ollama_fn()("choose action\nJSON RESPONSE:")
         payload = json.loads(urlopen.call_args.args[0].data)
         assert payload["format"] == "json"
-        assert payload["options"]["num_ctx"] >= 8192
+        assert payload["options"]["num_ctx"] == 4096
+        assert payload["keep_alive"] == "5m"
 
 
 def test_streamed_action_returns_before_trailing_generation():
@@ -163,7 +165,8 @@ def test_streamed_action_returns_before_trailing_generation():
         json.dumps({"response": '"TASK_COMPLETE","parameters":{}}'}),
         "must never be consumed after the complete action",
     ])
-    with patch("urllib.request.urlopen") as urlopen:
+    with patch("jarvis.model_runtime.ensure_model_ready", return_value=Mock(ready=True)), \
+         patch("urllib.request.urlopen") as urlopen:
         urlopen.return_value.__enter__.return_value = events
         reply = _make_ollama_fn().structured("JSON RESPONSE:", {"type": "object"})
         assert json.loads(reply)["action"] == "TASK_COMPLETE"

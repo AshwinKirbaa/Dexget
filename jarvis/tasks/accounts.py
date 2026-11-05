@@ -45,6 +45,18 @@ class AccountManager:
             self.task_policies["gmail"] = "personal"
             self.task_policies["general_web"] = "personal"
 
+        # Optional enforced media identity.  This is intentionally profile
+        # metadata only: JARVIS never stores a Google password or cookies.
+        youtube_account = os.environ.get("JARVIS_YOUTUBE_ACCOUNT", "").strip()
+        if youtube_account:
+            browser = os.environ.get("JARVIS_YOUTUBE_BROWSER", "chrome").strip() or "chrome"
+            profile = os.environ.get("JARVIS_YOUTUBE_PROFILE", "Default").strip() or "Default"
+            self.accounts[youtube_account] = AccountProfile(
+                youtube_account, browser.lower(), profile
+            )
+            self.task_policies["youtube"] = youtube_account
+            self.task_policies["youtube_music"] = youtube_account
+
     def save_config(self):
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
         data = {
