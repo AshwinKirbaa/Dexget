@@ -526,6 +526,48 @@ def test_call_layout_is_contextual_and_controls_microphone():
         app.processEvents()
 
 
+def test_compact_click_opens_feature_before_dexget_ai():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.update_media({
+            "title": "Purpose Is Glorious",
+            "artist": "Natalie Holt",
+            "app": "YouTube Music",
+            "playing": True,
+        })
+        widget.toggle_island()
+        widget._animation.setCurrentTime(widget._animation.duration())
+        widget._show_feature_content()
+        app.processEvents()
+
+        assert widget.is_expanded
+        assert widget._expanded_view == "feature"
+        assert not widget.feature_panel.isHidden()
+        assert widget.feature_eyebrow.text() == "NOW PLAYING"
+        assert widget.feature_title.text() == "Purpose Is Glorious"
+        assert widget.scroll_area.isHidden()
+        assert widget.input_frame.isHidden()
+
+        widget.open_ai_panel()
+        widget._animation.setCurrentTime(widget._animation.duration())
+        widget._show_expanded_content()
+        app.processEvents()
+        assert widget._expanded_view == "ai"
+        assert widget.feature_panel.isHidden()
+        assert not widget.scroll_area.isHidden()
+        assert not widget.input_frame.isHidden()
+    finally:
+        widget.worker.shutdown()
+        widget.media_worker.shutdown()
+        widget.worker.wait(2000)
+        widget.media_worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_interrupted_expand_does_not_reveal_stale_content():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:

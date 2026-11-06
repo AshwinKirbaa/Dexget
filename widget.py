@@ -370,6 +370,7 @@ class JarvisWidget(QWidget):
     MEDIA_MIN_WIDTH = 400
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
+    FEATURE_EXPANDED_SIZE = QSize(440, 230)
     TOP_MARGIN = 8
     HOT_ZONE_WIDTH = 140
     HOT_ZONE_HEIGHT = 12
@@ -379,6 +380,8 @@ class JarvisWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.is_expanded = False
+        self._expanded_view = "feature"
+        self._feature_action = None
         self._animation = None
         self._animation_target = None
         self._transition_generation = 0
@@ -704,6 +707,53 @@ class JarvisWidget(QWidget):
         self.title_bar.mousePressEvent = self.title_mousePressEvent
         self.title_bar.mouseReleaseEvent = self.title_mouseReleaseEvent
         
+        # --- Contextual feature surface ---
+        self.feature_panel = QFrame()
+        self.feature_panel.setStyleSheet("""
+            QFrame#FeaturePanel { background: transparent; }
+            QLabel#FeatureEyebrow { color: #7ecfff; font-size: 10px;
+                                    font-weight: 700; letter-spacing: 1px; }
+            QLabel#FeatureTitle { color: white; font-size: 20px; font-weight: 650; }
+            QLabel#FeatureDetail { color: #aeb5bf; font-size: 12px; }
+        """)
+        self.feature_panel.setObjectName("FeaturePanel")
+        feature_layout = QVBoxLayout(self.feature_panel)
+        feature_layout.setContentsMargins(22, 16, 22, 18)
+        feature_layout.setSpacing(7)
+        self.feature_eyebrow = QLabel("DEXGET")
+        self.feature_eyebrow.setObjectName("FeatureEyebrow")
+        self.feature_title = QLabel("Ready")
+        self.feature_title.setObjectName("FeatureTitle")
+        self.feature_title.setWordWrap(True)
+        self.feature_detail = QLabel("Choose a feature or open Dexget AI.")
+        self.feature_detail.setObjectName("FeatureDetail")
+        self.feature_detail.setWordWrap(True)
+        feature_actions = QHBoxLayout()
+        feature_actions.setSpacing(8)
+        self.feature_primary_btn = QPushButton("Screen Assist")
+        self.feature_primary_btn.setFixedHeight(34)
+        self.feature_primary_btn.clicked.connect(self._run_feature_action)
+        self.feature_ai_btn = QPushButton("✦  Dexget AI")
+        self.feature_ai_btn.setFixedHeight(34)
+        self.feature_ai_btn.clicked.connect(self.open_ai_panel)
+        for button in (self.feature_primary_btn, self.feature_ai_btn):
+            button.setStyleSheet("""
+                QPushButton { color: white; background: rgba(255,255,255,18);
+                              border: 1px solid rgba(255,255,255,35);
+                              border-radius: 17px; padding: 0 15px; }
+                QPushButton:hover { background: rgba(74,144,226,90); }
+                QPushButton:pressed { background: rgba(74,144,226,130); }
+            """)
+        feature_actions.addWidget(self.feature_primary_btn)
+        feature_actions.addStretch()
+        feature_actions.addWidget(self.feature_ai_btn)
+        feature_layout.addWidget(self.feature_eyebrow)
+        feature_layout.addWidget(self.feature_title)
+        feature_layout.addWidget(self.feature_detail)
+        feature_layout.addStretch()
+        feature_layout.addLayout(feature_actions)
+        self.feature_panel.hide()
+
         # --- Chat History Area ---
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
@@ -807,6 +857,7 @@ class JarvisWidget(QWidget):
         
         # Assemble
         container_layout.addWidget(self.title_bar)
+        container_layout.addWidget(self.feature_panel)
         container_layout.addWidget(self.scroll_area)
         container_layout.addWidget(self.input_frame)
         
@@ -907,6 +958,11 @@ class JarvisWidget(QWidget):
         compact_width = self._compact_size().width()
         return QSize(max(self.EXPANDED_SIZE.width(), compact_width),
                      self.EXPANDED_SIZE.height())
+
+    def _feature_expanded_size(self):
+        return QSize(max(self.FEATURE_EXPANDED_SIZE.width(),
+                         self._compact_size().width()),
+                     self.FEATURE_EXPANDED_SIZE.height())
 
     def _place_top_center(self):
         size = self._expanded_size() if self.is_expanded else self._compact_size()
@@ -1044,6 +1100,8 @@ class JarvisWidget(QWidget):
         self._fade_expanded_content()
 
     def expand_island(self, focus_input=False):
+        """Open the Dexget AI conversation explicitly."""
+        self._expanded_view = "ai"
         self._collapse_timer.stop()
         self._auto_hidden = False
         self._media_manually_hidden = False
@@ -1053,6 +1111,7 @@ class JarvisWidget(QWidget):
         self.input_opacity.setOpacity(0.0)
         self.scroll_area.hide()
         self.input_frame.hide()
+        self.feature_panel.hide()
         if not self.confirmation_panel.isHidden() or self.confirmation_label.text():
             self.confirmation_panel.setVisible(not self.confirmation_panel.isHidden())
         self.expand_btn.setText("⌃")
@@ -1088,6 +1147,7 @@ class JarvisWidget(QWidget):
         self.is_expanded = False
         self.scroll_area.hide()
         self.input_frame.hide()
+        self.feature_panel.hide()
         self.expand_btn.setText("⌄")
         self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS)
 
@@ -1205,7 +1265,95 @@ class JarvisWidget(QWidget):
         if self.is_expanded:
             self.collapse_island()
         else:
-            self.expand_island(True)
+            self.expand_feature()
+
+    def _feature_snapshot(self):
+        if self._notification_active:
+            return ("NOTIFICATION", self.notification_title.text(),
+                    self.notification_body.text(), "Dismiss",
+                    lambda: self.finish_notification_activity())
+        if self._headset_active:
+            return ("AUDIO DEVICE", self.headset_name.text(), "Connected",
+                    "Audio settings", lambda: self.worker.submit_text(
+                        "open sound settings", display_text="Open sound settings"))
+        if self._low_power_active:
+            return ("BATTERY", "Low power mode", self.low_power_percent.text(),
+                    "Battery settings", lambda: self.worker.submit_text(
+                        "open battery settings", display_text="Open battery settings"))
+        if self._charging_active:
+            return ("BATTERY", "Charging", self.charging_percent.text(),
+                    "Battery settings", lambda: self.worker.submit_text(
+                        "open battery settings", display_text="Open battery settings"))
+        if self._call_context:
+            state = "Microphone muted" if self._call_muted else "Microphone active"
+            return ("LIVE CALL", f"{self._call_context} Call", state,
+                    "Unmute" if self._call_muted else "Mute", self.toggle_call_mute)
+        if self._media:
+            title = self._media.get("title", "Now playing")
+            artist = self._media.get("artist") or self._media.get("app", "Media")
+            return ("NOW PLAYING", title, artist,
+                    "Pause" if self._media.get("playing") else "Play",
+                    lambda: self.media_worker.control("play_pause"))
+        return ("DEXGET", "Ready", "Capture the current screen or open Dexget AI.",
+                "Screen Assist", self.start_screen_assist)
+
+    def _prepare_feature_panel(self):
+        eyebrow, title, detail, action_text, action = self._feature_snapshot()
+        self.feature_eyebrow.setText(eyebrow)
+        self.feature_title.setText(title)
+        self.feature_detail.setText(detail)
+        self.feature_primary_btn.setText(action_text)
+        self._feature_action = action
+
+    def _run_feature_action(self):
+        if self._feature_action:
+            self._feature_action()
+        self._prepare_feature_panel()
+
+    def _show_feature_content(self):
+        if self.is_expanded and self._expanded_view == "feature":
+            self.feature_panel.show()
+
+    def expand_feature(self):
+        """Expand the activity represented by the compact island."""
+        self._collapse_timer.stop()
+        self._call_hide_timer.stop()
+        self._auto_hidden = False
+        self._media_manually_hidden = False
+        self.setWindowOpacity(1.0)
+        self.is_expanded = True
+        self._expanded_view = "feature"
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.feature_panel.hide()
+        self._prepare_feature_panel()
+        generation = self._animate_to(
+            self._feature_expanded_size(), self.PANEL_TRANSITION_MS)
+        QTimer.singleShot(
+            150,
+            lambda: self._show_feature_content()
+            if (self.is_expanded and self._expanded_view == "feature"
+                and generation == self._transition_generation)
+            else None,
+        )
+
+    def open_ai_panel(self):
+        """Switch from a feature surface to the automation conversation."""
+        self._expanded_view = "ai"
+        self.feature_panel.hide()
+        self.scroll_opacity.setOpacity(0.0)
+        self.input_opacity.setOpacity(0.0)
+        generation = self._animate_to(self._expanded_size(), self.PANEL_TRANSITION_MS)
+        QTimer.singleShot(
+            150,
+            lambda: self._show_expanded_content()
+            if (self.is_expanded and self._expanded_view == "ai"
+                and generation == self._transition_generation)
+            else None,
+        )
+        QTimer.singleShot(235, lambda: self.input_field.setFocus()
+                          if self.is_expanded and self._expanded_view == "ai"
+                          else None)
 
     def activate_island(self):
         if self.isMinimized():
