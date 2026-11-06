@@ -481,7 +481,9 @@ class JarvisWidget(QWidget):
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
     FEATURE_EXPANDED_SIZE = QSize(440, 230)
-    MEDIA_FEATURE_SIZE = QSize(390, 160)
+    MEDIA_FEATURE_MIN_WIDTH = 390
+    MEDIA_FEATURE_MAX_WIDTH = 560
+    MEDIA_FEATURE_HEIGHT = 160
     TOP_MARGIN = 8
     HOT_ZONE_WIDTH = 140
     HOT_ZONE_HEIGHT = 12
@@ -1080,7 +1082,10 @@ class JarvisWidget(QWidget):
         self.add_message("Jarvis", "Describe a desktop or browser task. I’ll show progress here. Use Stop to cancel. Enable the microphone for voice input.")
 
     def _target_geometry(self, size):
-        screen = self.screen() or QApplication.primaryScreen()
+        # Anchor all width variants to the monitor's actual centre.  Using the
+        # window's transient screen during a resize could retain an off-centre
+        # native frame when a long title changed the island width.
+        screen = QApplication.primaryScreen() or self.screen()
         area = screen.availableGeometry()
         x = area.x() + (area.width() - size.width()) // 2
         y = area.y() if size == self.HIDDEN_SIZE else area.y() + self.TOP_MARGIN
@@ -1159,7 +1164,18 @@ class JarvisWidget(QWidget):
 
     def _feature_expanded_size(self):
         if self._media:
-            return QSize(self.MEDIA_FEATURE_SIZE)
+            title = self._media.get("title") or "Now playing"
+            artist = self._media.get("artist") or self._media.get("app") or "Media"
+            text_width = max(
+                self.media_feature_title.fontMetrics().horizontalAdvance(title),
+                self.media_feature_artist.fontMetrics().horizontalAdvance(artist),
+            )
+            # margins + artwork + gaps + waveform; clamp so unusually long
+            # metadata stays readable without taking over the screen.
+            width = 44 + 60 + 10 + text_width + 12 + 25
+            width = max(self.MEDIA_FEATURE_MIN_WIDTH,
+                        min(self.MEDIA_FEATURE_MAX_WIDTH, width))
+            return QSize(width, self.MEDIA_FEATURE_HEIGHT)
         return QSize(max(self.FEATURE_EXPANDED_SIZE.width(),
                          self._compact_size().width()),
                      self.FEATURE_EXPANDED_SIZE.height())
@@ -2447,6 +2463,9 @@ class JarvisWidget(QWidget):
             self._set_media_controls_visible(True)
             if self.is_expanded and self._expanded_view == "feature":
                 self._update_media_feature_panel()
+                if previous_key != self._last_media_key:
+                    self._animate_to(
+                        self._feature_expanded_size(), self.PANEL_TRANSITION_MS)
         else:
             self._media_pulse_timer.stop()
             self._last_media_key = None

@@ -558,7 +558,12 @@ def test_compact_click_opens_feature_before_dexget_ai():
         assert widget.media_total_label.text() == "-2:27"
         assert widget.media_seek_slider.value() == 42
         assert widget.media_seek_slider.maximum() == 189
-        assert widget._feature_expanded_size() == widget.MEDIA_FEATURE_SIZE
+        media_size = widget._feature_expanded_size()
+        assert media_size.height() == widget.MEDIA_FEATURE_HEIGHT
+        assert widget.MEDIA_FEATURE_MIN_WIDTH <= media_size.width() <= widget.MEDIA_FEATURE_MAX_WIDTH
+        screen_area = QApplication.primaryScreen().availableGeometry()
+        media_geometry = widget._target_geometry(media_size)
+        assert abs(media_geometry.center().x() - screen_area.center().x()) <= 1
         assert widget.scroll_area.isHidden()
         assert widget.input_frame.isHidden()
         assert widget._feature_collapse_timer.isActive()
