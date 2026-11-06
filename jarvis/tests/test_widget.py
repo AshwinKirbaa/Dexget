@@ -551,6 +551,7 @@ def test_compact_click_opens_feature_before_dexget_ai():
         assert widget.feature_eyebrow.text() == "NOW PLAYING"
         assert widget.feature_title.text() == "Purpose Is Glorious"
         assert not widget.media_feature_widget.isHidden()
+        assert widget.feature_ai_btn.isHidden()
         assert widget.media_feature_title.text() == "Purpose Is Glorious"
         assert widget.media_feature_artist.text() == "Natalie Holt"
         assert widget.media_elapsed_label.text() == "0:42"

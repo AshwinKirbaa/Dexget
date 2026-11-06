@@ -849,6 +849,7 @@ class JarvisWidget(QWidget):
         self.feature_ai_btn = QPushButton("✦  Dexget AI")
         self.feature_ai_btn.setFixedHeight(34)
         self.feature_ai_btn.clicked.connect(self.open_ai_panel)
+        self.feature_ai_btn.hide()
         for button in (self.feature_primary_btn, self.feature_ai_btn):
             button.setStyleSheet("""
                 QPushButton { color: white; background: rgba(255,255,255,18);
@@ -859,7 +860,6 @@ class JarvisWidget(QWidget):
             """)
         feature_actions.addWidget(self.feature_primary_btn)
         feature_actions.addStretch()
-        feature_actions.addWidget(self.feature_ai_btn)
         feature_layout.addWidget(self.feature_eyebrow)
         feature_layout.addWidget(self.feature_title)
         feature_layout.addWidget(self.feature_detail)
@@ -1421,6 +1421,9 @@ class JarvisWidget(QWidget):
         self.feature_detail.setText(detail)
         self.feature_primary_btn.setText(action_text)
         self._feature_action = action
+        # Contextual activities stay focused on their own controls.  Dexget AI
+        # is intentionally available only from the default compact island.
+        self.feature_ai_btn.hide()
         media_mode = bool(self._media)
         for widget in (self.feature_eyebrow, self.feature_title,
                        self.feature_detail, self.feature_primary_btn):
