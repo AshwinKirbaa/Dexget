@@ -564,6 +564,8 @@ def test_compact_click_opens_feature_before_dexget_ai():
         screen_area = QApplication.primaryScreen().availableGeometry()
         media_geometry = widget._target_geometry(media_size)
         assert abs(media_geometry.center().x() - screen_area.center().x()) <= 1
+        assert abs(widget.geometry().center().x() - screen_area.center().x()) <= 1
+        assert widget.container.size() == media_size
         assert widget.scroll_area.isHidden()
         assert widget.input_frame.isHidden()
         assert widget._feature_collapse_timer.isActive()

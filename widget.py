@@ -1243,8 +1243,20 @@ class JarvisWidget(QWidget):
             if generation != self._transition_generation:
                 return
             if commit_window:
+                # Keep the final child surface locked to the exact geometry
+                # used by the animation. Releasing its constraints here let a
+                # long QLabel size hint expand from the left edge, producing a
+                # visibly off-centre third/final frame.
                 self.setGeometry(target)
-                self._reset_container_constraints()
+                self.main_layout.setAlignment(
+                    self.container,
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+                self.container.setFixedSize(size)
+                self.main_layout.activate()
+                QTimer.singleShot(
+                    0,
+                    lambda: self._reassert_centered_surface(generation, size),
+                )
             if on_finished:
                 on_finished()
 
@@ -1259,6 +1271,18 @@ class JarvisWidget(QWidget):
         self._animation_target = target
         animation.start()
         return generation
+
+    def _reassert_centered_surface(self, generation, size):
+        """Correct any queued Qt size-hint pass after the morph completes."""
+        if generation != self._transition_generation or self.isHidden():
+            return
+        target = self._target_geometry(size)
+        self.setGeometry(target)
+        self.container.setFixedSize(size)
+        self.main_layout.setAlignment(
+            self.container,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        self.main_layout.activate()
 
     def _animate_to(self, size, duration=None, curve=QEasingCurve.Type.OutCubic):
         return self._animate_surface_to(size, duration, curve)
