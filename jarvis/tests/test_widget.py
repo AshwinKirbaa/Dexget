@@ -558,7 +558,7 @@ def test_compact_click_opens_feature_before_dexget_ai():
         assert widget.media_total_label.text() == "-2:27"
         assert widget.media_seek_slider.value() == 42
         assert widget.media_seek_slider.maximum() == 189
-        assert widget._feature_expanded_size().height() == widget.MEDIA_FEATURE_HEIGHT
+        assert widget._feature_expanded_size() == widget.MEDIA_FEATURE_SIZE
         assert widget.scroll_area.isHidden()
         assert widget.input_frame.isHidden()
         assert widget._feature_collapse_timer.isActive()
@@ -613,7 +613,7 @@ def test_playback_start_does_not_duplicate_compact_header_over_player():
         assert widget._expanded_view == "feature"
         assert not widget.feature_panel.isHidden()
         assert widget.title_bar.isHidden()
-        assert widget.media_feature_play_btn.text() == "❚❚"
+        assert widget.media_feature_play_btn.playing
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()

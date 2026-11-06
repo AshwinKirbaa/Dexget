@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                              QFrame, QSizePolicy, QGraphicsDropShadowEffect,
                              QGraphicsOpacityEffect, QSlider)
-from PyQt6.QtCore import (Qt, QPoint, QThread, pyqtSignal, QTimer, QSize,
+from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QParallelAnimationGroup, QVariantAnimation,
                           QRectF, QAbstractAnimation)
@@ -17,6 +17,81 @@ from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap)
 
 import jarvis_integration
+
+
+class MediaControlButton(QPushButton):
+    """Font-independent Apple-style previous/play-pause/next control."""
+    def __init__(self, kind):
+        super().__init__()
+        self.kind = kind
+        self.playing = False
+        self.setFixedSize(48, 38)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet("QPushButton { background: transparent; border: none; }")
+
+    def set_playing(self, playing):
+        self.playing = bool(playing)
+        self.update()
+
+    @staticmethod
+    def _triangle(painter, points):
+        path = QPainterPath()
+        path.moveTo(points[0])
+        path.lineTo(points[1])
+        path.lineTo(points[2])
+        path.closeSubpath()
+        painter.drawPath(path)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor("#8ddcff") if self.isDown() else QColor("#ffffff")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        cx, cy = self.width() / 2, self.height() / 2
+        if self.kind == "play_pause":
+            if self.playing:
+                painter.drawRoundedRect(QRectF(cx - 8, cy - 11, 6, 22), 1.5, 1.5)
+                painter.drawRoundedRect(QRectF(cx + 2, cy - 11, 6, 22), 1.5, 1.5)
+            else:
+                self._triangle(painter, (
+                    QPointF(cx - 6, cy - 11), QPointF(cx - 6, cy + 11),
+                    QPointF(cx + 11, cy)))
+        elif self.kind == "previous":
+            self._triangle(painter, (
+                QPointF(cx - 1, cy - 9), QPointF(cx - 1, cy + 9),
+                QPointF(cx - 14, cy)))
+            self._triangle(painter, (
+                QPointF(cx + 13, cy - 9), QPointF(cx + 13, cy + 9),
+                QPointF(cx, cy)))
+        else:
+            self._triangle(painter, (
+                QPointF(cx + 1, cy - 9), QPointF(cx + 1, cy + 9),
+                QPointF(cx + 14, cy)))
+            self._triangle(painter, (
+                QPointF(cx - 13, cy - 9), QPointF(cx - 13, cy + 9),
+                QPointF(cx, cy)))
+
+
+class MediaWaveformIndicator(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.playing = False
+        self.setFixedSize(25, 24)
+
+    def set_playing(self, playing):
+        self.playing = bool(playing)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("white") if self.playing else QColor("#7b838d"),
+                            2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        heights = (7, 13, 18, 12, 8)
+        for index, height in enumerate(heights):
+            x = 3 + index * 4.5
+            painter.drawLine(QPointF(x, 12 - height / 2), QPointF(x, 12 + height / 2))
 
 
 class BatteryIndicator(QWidget):
@@ -391,7 +466,7 @@ class JarvisWidget(QWidget):
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
     FEATURE_EXPANDED_SIZE = QSize(440, 230)
-    MEDIA_FEATURE_HEIGHT = 174
+    MEDIA_FEATURE_SIZE = QSize(390, 160)
     TOP_MARGIN = 8
     HOT_ZONE_WIDTH = 140
     HOT_ZONE_HEIGHT = 12
@@ -759,8 +834,8 @@ class JarvisWidget(QWidget):
         self.media_feature_widget.setObjectName("MediaFeaturePlayer")
         self.media_feature_widget.setStyleSheet("""
             QFrame#MediaFeaturePlayer { background: transparent; }
-            QLabel#MediaFeatureTitle { color: white; font-size: 13px; font-weight: 650; }
-            QLabel#MediaFeatureArtist { color: #aeb5bf; font-size: 10px; }
+            QLabel#MediaFeatureTitle { color: white; font-size: 14px; font-weight: 700; }
+            QLabel#MediaFeatureArtist { color: #aeb5bf; font-size: 11px; }
             QLabel#MediaFeatureTime { color: #9aa1aa; font-size: 8px; }
             QSlider::groove:horizontal { height: 3px; background: #50555d; border-radius: 1px; }
             QSlider::sub-page:horizontal { background: white; border-radius: 1px; }
@@ -774,7 +849,7 @@ class JarvisWidget(QWidget):
         media_header.setSpacing(10)
         self.media_feature_art = QLabel("♪")
         self.media_feature_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.media_feature_art.setFixedSize(54, 54)
+        self.media_feature_art.setFixedSize(60, 60)
         self.media_feature_art.setStyleSheet(
             "background: #202329; border-radius: 8px; color: #8f99a6; font-size: 20px;")
         media_identity = QVBoxLayout()
@@ -789,9 +864,7 @@ class JarvisWidget(QWidget):
         media_identity.addWidget(self.media_feature_title)
         media_identity.addWidget(self.media_feature_artist)
         media_identity.addStretch()
-        self.media_feature_visualizer = QLabel("▮▰▮")
-        self.media_feature_visualizer.setStyleSheet(
-            "color: white; font-size: 12px; font-weight: 700;")
+        self.media_feature_visualizer = MediaWaveformIndicator()
         media_header.addWidget(self.media_feature_art)
         media_header.addLayout(media_identity, 1)
         media_header.addWidget(self.media_feature_visualizer)
@@ -812,21 +885,18 @@ class JarvisWidget(QWidget):
         media_player_layout.addLayout(timeline_layout)
 
         media_controls = QHBoxLayout()
-        media_controls.setSpacing(28)
+        media_controls.setSpacing(22)
         media_controls.addStretch()
-        self.media_feature_previous_btn = QPushButton("◀◀")
-        self.media_feature_play_btn = QPushButton("▶")
-        self.media_feature_next_btn = QPushButton("▶▶")
+        self.media_feature_previous_btn = MediaControlButton("previous")
+        self.media_feature_play_btn = MediaControlButton("play_pause")
+        self.media_feature_next_btn = MediaControlButton("next")
         for button in (self.media_feature_previous_btn, self.media_feature_play_btn,
                        self.media_feature_next_btn):
-            button.setFixedSize(38, 32)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setStyleSheet("""
-                QPushButton { color: white; background: transparent; border: none;
-                              font-size: 18px; font-weight: 700; }
-                QPushButton:hover { color: #8ddcff; }
-                QPushButton:pressed { color: #8ddcff; }
-            """)
+            button.setToolTip({
+                self.media_feature_previous_btn: "Previous",
+                self.media_feature_play_btn: "Play or pause",
+                self.media_feature_next_btn: "Next",
+            }[button])
         self.media_feature_previous_btn.clicked.connect(
             lambda: self._control_expanded_media("previous"))
         self.media_feature_play_btn.clicked.connect(
@@ -1073,11 +1143,11 @@ class JarvisWidget(QWidget):
                      self.EXPANDED_SIZE.height())
 
     def _feature_expanded_size(self):
-        height = (self.MEDIA_FEATURE_HEIGHT if self._media
-                  else self.FEATURE_EXPANDED_SIZE.height())
+        if self._media:
+            return QSize(self.MEDIA_FEATURE_SIZE)
         return QSize(max(self.FEATURE_EXPANDED_SIZE.width(),
                          self._compact_size().width()),
-                     height)
+                     self.FEATURE_EXPANDED_SIZE.height())
 
     def _place_top_center(self):
         size = self._expanded_size() if self.is_expanded else self._compact_size()
@@ -1459,10 +1529,8 @@ class JarvisWidget(QWidget):
         self.media_feature_artist.setText(artist)
         self.media_feature_artist.setToolTip(artist)
         playing = bool(self._media.get("playing"))
-        self.media_feature_play_btn.setText("❚❚" if playing else "▶")
-        self.media_feature_visualizer.setText("▮▰▮" if playing else "▮▮▮")
-        self.media_feature_visualizer.setStyleSheet(
-            f"color: {'white' if playing else '#7b838d'}; font-size: 12px; font-weight: 700;")
+        self.media_feature_play_btn.set_playing(playing)
+        self.media_feature_visualizer.set_playing(playing)
         position = max(0, int(self._media.get("position") or 0))
         duration = max(position, int(self._media.get("duration") or 0))
         if not self.media_seek_slider.isSliderDown():
