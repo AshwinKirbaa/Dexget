@@ -880,7 +880,8 @@ class JarvisWidget(QWidget):
     def _animate_surface_to(self, size, duration=None,
                             curve=QEasingCurve.Type.OutCubic,
                             on_finished=None, commit_window=True,
-                            start_size=None, fade_title_bar=False):
+                            start_size=None, fade_title_bar=False,
+                            hide_before_final_frame=False):
         """Morph the visible island without resizing its native window per frame."""
         duration = duration or self.COMPACT_TRANSITION_MS
         target = self._target_geometry(size)
@@ -906,7 +907,10 @@ class JarvisWidget(QWidget):
         self.setGeometry(self._target_geometry(canvas))
         self.main_layout.activate()
 
+        native_hide_issued = False
+
         def update_surface(progress):
+            nonlocal native_hide_issued
             progress = float(progress)
             width = round(start_size.width() +
                           (size.width() - start_size.width()) * progress)
@@ -919,6 +923,13 @@ class JarvisWidget(QWidget):
                 # centre, rather than controls being relaid out every frame.
                 self.title_bar_opacity.setOpacity(
                     max(0.0, 1.0 - (progress / 0.28)))
+            if (hide_before_final_frame and progress >= 0.97
+                    and not native_hide_issued):
+                # Remove the native surface before Windows can paint the last
+                # tiny rectangle. The visual morph is already 97% complete,
+                # so this avoids an after-image without changing its motion.
+                native_hide_issued = True
+                self.hide()
             self.main_layout.activate()
 
         def finish_surface():
@@ -1083,6 +1094,7 @@ class JarvisWidget(QWidget):
             commit_window=False,
             start_size=QSize(self.size()),
             fade_title_bar=True,
+            hide_before_final_frame=True,
         )
         # A guarded fallback covers animation-driver interruption (display
         # sleep, shell restart, or Qt event-loop replacement) without allowing
