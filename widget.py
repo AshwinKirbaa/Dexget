@@ -480,6 +480,7 @@ class JarvisWidget(QWidget):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+        self.main_layout = main_layout
         
         # --- Main Container with Glassmorphism ---
         self.container = QFrame()
@@ -870,45 +871,92 @@ class JarvisWidget(QWidget):
         size = self._expanded_size() if self.is_expanded else self._compact_size()
         self.setGeometry(self._target_geometry(size))
 
-    def _animate_to(self, size, duration=None, curve=QEasingCurve.Type.OutCubic):
+    def _animate_surface_to(self, size, duration=None,
+                            curve=QEasingCurve.Type.OutCubic,
+                            on_finished=None, commit_window=True,
+                            start_size=None):
+        """Morph the visible island without resizing its native window per frame."""
         duration = duration or self.COMPACT_TRANSITION_MS
         target = self._target_geometry(size)
-        if (self._animation and self._animation_target == target
-                and self._animation.state() == QAbstractAnimation.State.Running):
-            return self._transition_generation
-        if self.geometry() == target:
-            self._animation_target = target
+        if (self._animation and self._animation_target == target and
+                self._animation.state() == QAbstractAnimation.State.Running):
             return self._transition_generation
         if self._animation:
             self._animation.stop()
         self._transition_generation += 1
-        self._animation = QPropertyAnimation(self, b"geometry", self)
+        generation = self._transition_generation
+        start_size = QSize(start_size or self.container.size())
+        if start_size.width() < 1 or start_size.height() < 1:
+            start_size = QSize(size)
+
+        canvas = QSize(max(start_size.width(), size.width()),
+                       max(start_size.height(), size.height()))
+        self.main_layout.setAlignment(
+            self.container,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        self.container.setFixedSize(start_size)
+        # This native geometry change is visually invisible: the child surface
+        # retains its old centered screen rectangle inside the new canvas.
+        self.setGeometry(self._target_geometry(canvas))
+        self.main_layout.activate()
+
+        def update_surface(progress):
+            progress = float(progress)
+            width = round(start_size.width() +
+                          (size.width() - start_size.width()) * progress)
+            height = round(start_size.height() +
+                           (size.height() - start_size.height()) * progress)
+            self.container.setFixedSize(width, height)
+            self.main_layout.activate()
+
+        def finish_surface():
+            if generation != self._transition_generation:
+                return
+            if commit_window:
+                self.setGeometry(target)
+                self._reset_container_constraints()
+            if on_finished:
+                on_finished()
+
+        animation = QVariantAnimation(self)
+        animation.setDuration(duration)
+        animation.setEasingCurve(curve)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.valueChanged.connect(update_surface)
+        animation.finished.connect(finish_surface)
+        self._animation = animation
         self._animation_target = target
-        self._animation.setDuration(duration)
-        self._animation.setEasingCurve(curve)
-        self._animation.setStartValue(self.geometry())
-        self._animation.setEndValue(target)
-        self._animation.start()
-        return self._transition_generation
+        animation.start()
+        return generation
+
+    def _animate_to(self, size, duration=None, curve=QEasingCurve.Type.OutCubic):
+        return self._animate_surface_to(size, duration, curve)
 
     def _present_compact(self, size, duration=None):
-        """Reveal at a deterministic geometry, then perform one fluid resize."""
+        """Reveal or morph a compact activity around a fixed screen center."""
         self._visibility_generation += 1
         self._is_hiding = False
         was_hidden = self.isHidden() or self._auto_hidden or self.windowOpacity() < 0.1
         if self._animation:
             self._animation.stop()
+        self._reset_container_constraints()
         self._animation_target = None
         self.setWindowOpacity(1.0)
         if was_hidden:
-            start = QSize(max(120, int(size.width() * 0.68)),
-                          max(34, size.height() - 8))
-            # Set the first painted geometry before show(), avoiding a frame at
-            # the previous/default size followed by a second corrective resize.
-            self.setGeometry(self._target_geometry(start))
+            start = QSize(self.MINIMIZE_SIZE)
+            self.setGeometry(self._target_geometry(size))
+            self.main_layout.setAlignment(
+                self.container,
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            self.container.setFixedSize(start)
+        else:
+            start = QSize(self.container.size())
         self.show()
         self.raise_()
-        self._animate_to(size, duration or self.COMPACT_TRANSITION_MS)
+        return self._animate_surface_to(
+            size, duration or self.COMPACT_TRANSITION_MS,
+            start_size=start)
 
     def _fade_expanded_content(self):
         if not self.is_expanded:
@@ -1000,10 +1048,6 @@ class JarvisWidget(QWidget):
 
     def hide_media_island(self):
         """Hide the UI without stopping either background worker."""
-        # Capture the visible center before interrupting an in-flight media
-        # resize. Stopping it can otherwise deliver one final queued geometry
-        # update and shift the minimize anchor sideways.
-        locked_center_x = self.geometry().center().x()
         self._media_manually_hidden = True
         self._is_hiding = True
         # Require the pointer to leave and re-enter the hot zone. Otherwise a
@@ -1014,51 +1058,18 @@ class JarvisWidget(QWidget):
         self._hover_leave_at = None
         self.scroll_area.hide()
         self.input_frame.hide()
-        if self._animation:
-            self._animation.stop()
-        self._animation_target = None
         self._visibility_generation += 1
         generation = self._visibility_generation
         self.setWindowOpacity(1.0)
-        # Morph in place, then hide once. Animating native window
-        # opacity in parallel with geometry makes Windows recompose the layered
-        # surface twice per frame and causes flashes on some GPUs.
-        start_geometry = self.geometry()
-        start_geometry.moveCenter(
-            QPoint(locked_center_x, start_geometry.center().y()))
-        self.setGeometry(start_geometry)
-        minimize_target = QRect(
-            round(locked_center_x - self.MINIMIZE_SIZE.width() / 2.0),
-            start_geometry.y(),
-            self.MINIMIZE_SIZE.width(),
-            self.MINIMIZE_SIZE.height(),
+        # The native window remains stationary; only the center-aligned black
+        # surface contracts. Hide after the surface reaches its pill state.
+        self._animate_surface_to(
+            self.MINIMIZE_SIZE,
+            self.COMPACT_TRANSITION_MS,
+            on_finished=self._complete_media_hide,
+            commit_window=False,
+            start_size=QSize(self.size()),
         )
-
-        def update_centered_geometry(progress):
-            progress = float(progress)
-            width = round(start_geometry.width() +
-                          (minimize_target.width() - start_geometry.width()) * progress)
-            height = round(start_geometry.height() +
-                           (minimize_target.height() - start_geometry.height()) * progress)
-            y = round(start_geometry.y() +
-                      (minimize_target.y() - start_geometry.y()) * progress)
-            frame = self._centered_frame(
-                locked_center_x, y, width, height)
-            # Keep move last: Windows may reposition a frameless top-level
-            # window while processing resize(), especially across DPI zones.
-            self.resize(frame.size())
-            self.move(frame.topLeft())
-
-        geometry_progress = QVariantAnimation(self)
-        geometry_progress.setDuration(self.COMPACT_TRANSITION_MS)
-        geometry_progress.setEasingCurve(QEasingCurve.Type.OutCubic)
-        geometry_progress.setStartValue(0.0)
-        geometry_progress.setEndValue(1.0)
-        geometry_progress.valueChanged.connect(update_centered_geometry)
-        geometry_progress.finished.connect(self._complete_media_hide)
-        self._animation = geometry_progress
-        self._animation_target = minimize_target
-        geometry_progress.start()
         # A guarded fallback covers animation-driver interruption (display
         # sleep, shell restart, or Qt event-loop replacement) without allowing
         # an old timer to hide a newer, already-visible activity.
@@ -1073,6 +1084,12 @@ class JarvisWidget(QWidget):
         self._is_hiding = False
         if self._auto_hidden:
             self.hide()
+            self._reset_container_constraints()
+
+    def _reset_container_constraints(self):
+        self.container.setMinimumSize(0, 0)
+        self.container.setMaximumSize(16777215, 16777215)
+        self.main_layout.setAlignment(self.container, Qt.AlignmentFlag(0))
 
     def reveal_idle_island(self):
         if not self._auto_hidden:

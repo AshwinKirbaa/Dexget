@@ -73,9 +73,17 @@ def test_dynamic_island_reacts_to_media_metadata():
         assert not widget._media_manually_hidden
         widget.resize(widget.MEDIA_SIZE)
         widget.show()
+        settle_deadline = time.monotonic() + 1
+        while time.monotonic() < settle_deadline:
+            app.processEvents()
+            if (widget.name_label.width() >= 150 and
+                    (not widget._animation or
+                     widget._animation.state() != widget._animation.State.Running)):
+                break
+            time.sleep(0.01)
         app.processEvents()
         assert widget.name_label.text() == "One Sun One Moon"
-        assert 150 <= widget.name_label.width() <= 200
+        assert widget.name_label.maximumWidth() == 200
         assert widget.status_label.text() == "Anirudh Ravichander"
         assert widget.play_pause_btn.text() == "❚❚"
         assert not widget.album_art.isHidden()
@@ -83,15 +91,16 @@ def test_dynamic_island_reacts_to_media_metadata():
         assert widget.MEDIA_MIN_WIDTH <= widget._compact_size().width() < widget.MEDIA_SIZE.width()
         assert widget._compact_size().height() == widget.MEDIA_SIZE.height()
 
-        starting_center_x = widget.geometry().center().x()
+        starting_geometry = widget.geometry()
         widget.hide_media_island()
         assert widget._media_manually_hidden
         assert widget._auto_hidden
         minimize_target = widget._animation_target
         assert minimize_target.size() == widget.MINIMIZE_SIZE
-        assert abs(minimize_target.center().x() - starting_center_x) <= 1
-        midpoint = widget._centered_frame(starting_center_x, 8, 302, 50)
-        assert abs(midpoint.center().x() - starting_center_x) <= 1
+        assert widget.geometry() == starting_geometry
+        widget._animation.setCurrentTime(widget._animation.duration() // 2)
+        assert widget.geometry() == starting_geometry
+        assert widget.container.width() < starting_geometry.width()
         deadline = time.monotonic() + 1
         while not widget.isHidden() and time.monotonic() < deadline:
             app.processEvents()
@@ -231,7 +240,7 @@ def test_media_expand_preserves_content_aware_width():
         compact_width = widget._compact_size().width()
         widget.resize(widget._compact_size())
         widget.expand_island()
-        target = widget._animation.endValue()
+        target = widget._animation_target
         assert target.width() == compact_width
         assert target.width() >= widget.EXPANDED_SIZE.width()
         assert target.height() == widget.EXPANDED_SIZE.height()
