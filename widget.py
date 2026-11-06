@@ -391,6 +391,7 @@ class JarvisWidget(QWidget):
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
     FEATURE_EXPANDED_SIZE = QSize(440, 230)
+    MEDIA_FEATURE_HEIGHT = 174
     TOP_MARGIN = 8
     HOT_ZONE_WIDTH = 140
     HOT_ZONE_HEIGHT = 12
@@ -741,7 +742,7 @@ class JarvisWidget(QWidget):
         """)
         self.feature_panel.setObjectName("FeaturePanel")
         feature_layout = QVBoxLayout(self.feature_panel)
-        feature_layout.setContentsMargins(22, 16, 22, 18)
+        feature_layout.setContentsMargins(22, 14, 22, 14)
         feature_layout.setSpacing(7)
         self.feature_eyebrow = QLabel("DEXGET")
         self.feature_eyebrow.setObjectName("FeatureEyebrow")
@@ -758,24 +759,24 @@ class JarvisWidget(QWidget):
         self.media_feature_widget.setObjectName("MediaFeaturePlayer")
         self.media_feature_widget.setStyleSheet("""
             QFrame#MediaFeaturePlayer { background: transparent; }
-            QLabel#MediaFeatureTitle { color: white; font-size: 15px; font-weight: 650; }
-            QLabel#MediaFeatureArtist { color: #aeb5bf; font-size: 11px; }
-            QLabel#MediaFeatureTime { color: #8d949e; font-size: 9px; }
-            QSlider::groove:horizontal { height: 4px; background: #4b5058; border-radius: 2px; }
-            QSlider::sub-page:horizontal { background: white; border-radius: 2px; }
-            QSlider::handle:horizontal { background: white; width: 10px; margin: -3px 0;
-                                         border-radius: 5px; }
+            QLabel#MediaFeatureTitle { color: white; font-size: 13px; font-weight: 650; }
+            QLabel#MediaFeatureArtist { color: #aeb5bf; font-size: 10px; }
+            QLabel#MediaFeatureTime { color: #9aa1aa; font-size: 8px; }
+            QSlider::groove:horizontal { height: 3px; background: #50555d; border-radius: 1px; }
+            QSlider::sub-page:horizontal { background: white; border-radius: 1px; }
+            QSlider::handle:horizontal { background: white; width: 6px; margin: -2px 0;
+                                         border-radius: 3px; }
         """)
         media_player_layout = QVBoxLayout(self.media_feature_widget)
         media_player_layout.setContentsMargins(0, 0, 0, 0)
-        media_player_layout.setSpacing(8)
+        media_player_layout.setSpacing(6)
         media_header = QHBoxLayout()
-        media_header.setSpacing(11)
+        media_header.setSpacing(10)
         self.media_feature_art = QLabel("♪")
         self.media_feature_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.media_feature_art.setFixedSize(58, 58)
+        self.media_feature_art.setFixedSize(54, 54)
         self.media_feature_art.setStyleSheet(
-            "background: #202329; border-radius: 10px; color: #8f99a6; font-size: 22px;")
+            "background: #202329; border-radius: 8px; color: #8f99a6; font-size: 20px;")
         media_identity = QVBoxLayout()
         media_identity.setSpacing(2)
         self.media_feature_title = QLabel("Now playing")
@@ -790,7 +791,7 @@ class JarvisWidget(QWidget):
         media_identity.addStretch()
         self.media_feature_visualizer = QLabel("▮▰▮")
         self.media_feature_visualizer.setStyleSheet(
-            "color: #55d6ff; font-size: 15px; font-weight: 700;")
+            "color: white; font-size: 12px; font-weight: 700;")
         media_header.addWidget(self.media_feature_art)
         media_header.addLayout(media_identity, 1)
         media_header.addWidget(self.media_feature_visualizer)
@@ -811,23 +812,21 @@ class JarvisWidget(QWidget):
         media_player_layout.addLayout(timeline_layout)
 
         media_controls = QHBoxLayout()
-        media_controls.setSpacing(19)
+        media_controls.setSpacing(28)
         media_controls.addStretch()
-        self.media_feature_previous_btn = QPushButton("|◀")
+        self.media_feature_previous_btn = QPushButton("◀◀")
         self.media_feature_play_btn = QPushButton("▶")
-        self.media_feature_next_btn = QPushButton("▶|")
+        self.media_feature_next_btn = QPushButton("▶▶")
         for button in (self.media_feature_previous_btn, self.media_feature_play_btn,
                        self.media_feature_next_btn):
-            button.setFixedSize(42, 38)
+            button.setFixedSize(38, 32)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setStyleSheet("""
                 QPushButton { color: white; background: transparent; border: none;
-                              font-size: 20px; font-weight: 700; }
-                QPushButton:hover { background: rgba(255,255,255,18); border-radius: 19px; }
+                              font-size: 18px; font-weight: 700; }
+                QPushButton:hover { color: #8ddcff; }
                 QPushButton:pressed { color: #8ddcff; }
             """)
-        self.media_feature_play_btn.setStyleSheet(self.media_feature_play_btn.styleSheet() +
-            "QPushButton { background: rgba(255,255,255,20); border-radius: 19px; }")
         self.media_feature_previous_btn.clicked.connect(
             lambda: self._control_expanded_media("previous"))
         self.media_feature_play_btn.clicked.connect(
@@ -1074,9 +1073,11 @@ class JarvisWidget(QWidget):
                      self.EXPANDED_SIZE.height())
 
     def _feature_expanded_size(self):
+        height = (self.MEDIA_FEATURE_HEIGHT if self._media
+                  else self.FEATURE_EXPANDED_SIZE.height())
         return QSize(max(self.FEATURE_EXPANDED_SIZE.width(),
                          self._compact_size().width()),
-                     self.FEATURE_EXPANDED_SIZE.height())
+                     height)
 
     def _place_top_center(self):
         size = self._expanded_size() if self.is_expanded else self._compact_size()
@@ -1453,14 +1454,16 @@ class JarvisWidget(QWidget):
         self.media_feature_play_btn.setText("❚❚" if playing else "▶")
         self.media_feature_visualizer.setText("▮▰▮" if playing else "▮▮▮")
         self.media_feature_visualizer.setStyleSheet(
-            f"color: {'#55d6ff' if playing else '#7b838d'}; font-size: 15px; font-weight: 700;")
+            f"color: {'white' if playing else '#7b838d'}; font-size: 12px; font-weight: 700;")
         position = max(0, int(self._media.get("position") or 0))
         duration = max(position, int(self._media.get("duration") or 0))
         if not self.media_seek_slider.isSliderDown():
             self.media_seek_slider.setRange(0, duration)
             self.media_seek_slider.setValue(min(position, duration))
         self.media_elapsed_label.setText(self._format_media_time(position))
-        self.media_total_label.setText(self._format_media_time(duration))
+        remaining = max(0, duration - position)
+        self.media_total_label.setText(
+            f"-{self._format_media_time(remaining)}" if duration else "0:00")
         artwork = self._media.get("artwork") or b""
         pixmap = QPixmap()
         if artwork and pixmap.loadFromData(artwork):

@@ -555,9 +555,10 @@ def test_compact_click_opens_feature_before_dexget_ai():
         assert widget.media_feature_title.text() == "Purpose Is Glorious"
         assert widget.media_feature_artist.text() == "Natalie Holt"
         assert widget.media_elapsed_label.text() == "0:42"
-        assert widget.media_total_label.text() == "3:09"
+        assert widget.media_total_label.text() == "-2:27"
         assert widget.media_seek_slider.value() == 42
         assert widget.media_seek_slider.maximum() == 189
+        assert widget._feature_expanded_size().height() == widget.MEDIA_FEATURE_HEIGHT
         assert widget.scroll_area.isHidden()
         assert widget.input_frame.isHidden()
         assert widget._feature_collapse_timer.isActive()
