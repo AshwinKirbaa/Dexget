@@ -3,6 +3,8 @@ import threading
 import queue
 import asyncio
 import time
+import os
+import glob
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout, 
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                              QFrame, QSizePolicy, QGraphicsDropShadowEffect,
@@ -405,6 +407,9 @@ class JarvisWidget(QWidget):
         self._foreground_process = ""
         self._call_context = None
         self._call_muted = False
+        self._discord_log_path = None
+        self._discord_log_offset = 0
+        self._discord_rtc_active = False
         self.screen_assist_worker = None
         self._screen_context = None
         self._headset_active = False
@@ -1369,6 +1374,11 @@ class JarvisWidget(QWidget):
             label for label, tokens in candidates
             if any(token in clients for token in tokens)
         }
+        # Discord initializes microphone capture while merely sitting on its
+        # Friends page. Require its WebRTC transport to have actually reached
+        # RTC_CONNECTED before treating that capture as a call.
+        if "Discord" in active_labels and not self._discord_rtc_connected():
+            active_labels.discard("Discord")
         # Once a call has been positively identified, keep its controls while
         # the same app retains live microphone access even if the user changes
         # windows. Initial activation is stricter and must match the foreground
@@ -1386,6 +1396,43 @@ class JarvisWidget(QWidget):
                     token.replace(".exe", "") in combined for token in tokens):
                 return label
         return None
+
+    def _discord_rtc_connected(self):
+        """Track Discord's current WebRTC connection from its append-only log."""
+        try:
+            appdata = os.environ.get("APPDATA", "")
+            files = glob.glob(os.path.join(
+                appdata, "discord", "logs", "discord-webrtc*"))
+            # Exclude rotated "discord-last-*" logs; they describe a previous
+            # Discord process and otherwise resurrect an old call state.
+            files = [path for path in files
+                     if not os.path.basename(path).startswith("discord-last-")]
+            if not files:
+                self._discord_rtc_active = False
+                return False
+            path = max(files, key=os.path.getmtime)
+            size = os.path.getsize(path)
+            if path != self._discord_log_path or size < self._discord_log_offset:
+                self._discord_log_path = path
+                self._discord_log_offset = 0
+                self._discord_rtc_active = False
+            with open(path, "rb") as stream:
+                stream.seek(self._discord_log_offset)
+                chunk = stream.read()
+                self._discord_log_offset = stream.tell()
+            text = chunk.decode("utf-8", errors="ignore").lower()
+            for line in text.splitlines():
+                if ("=> rtc_connected" in line
+                        or "=> connected" in line and "rtc media connection" in line):
+                    self._discord_rtc_active = True
+                elif any(marker in line for marker in (
+                        "=> rtc_disconnected", "=> disconnected",
+                        "disconnecting from rtc", "rtc connection destroyed")):
+                    self._discord_rtc_active = False
+            return self._discord_rtc_active
+        except (OSError, ValueError):
+            self._discord_rtc_active = False
+            return False
 
     def _check_call_context(self):
         application = self._detect_call_application()

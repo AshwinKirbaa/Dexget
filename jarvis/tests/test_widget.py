@@ -479,6 +479,22 @@ def test_call_layout_is_contextual_and_controls_microphone():
             widget._check_call_context()
         assert widget._call_context is None
         assert widget.call_mute_btn.isHidden()
+
+        widget._foreground_title = "Friends - Discord"
+        widget._foreground_process = "Discord.exe"
+        with patch.object(widget, "_active_microphone_clients",
+                          return_value={r"microphone\\nonpackaged\\discord.exe"}), \
+                patch.object(widget, "_discord_rtc_connected", return_value=False):
+            widget._check_call_context()
+        assert widget._call_context is None
+
+        with patch.object(widget, "_active_microphone_clients",
+                          return_value={r"microphone\\nonpackaged\\discord.exe"}), \
+                patch.object(widget, "_discord_rtc_connected", return_value=True):
+            widget._check_call_context()
+        assert widget._call_context == "Discord"
+        assert widget.name_label.text() == "Discord Call"
+        assert not widget.call_mute_btn.isHidden()
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()
