@@ -589,6 +589,40 @@ def test_compact_click_opens_feature_before_dexget_ai():
         app.processEvents()
 
 
+def test_playback_start_does_not_duplicate_compact_header_over_player():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        paused = {
+            "title": "Purpose Is Glorious", "artist": "Natalie Holt",
+            "app": "YouTube Music", "playing": False,
+            "position": 30, "duration": 189,
+        }
+        # Prepare an expanded media surface without running the normal paused
+        # auto-hide path, then reproduce pressing Play inside that surface.
+        widget._media = paused
+        widget.expand_feature()
+        widget._animation.setCurrentTime(widget._animation.duration())
+        widget._show_feature_content()
+        widget.update_media({**paused, "playing": True, "position": 31})
+        app.processEvents()
+
+        assert widget.is_expanded
+        assert widget._expanded_view == "feature"
+        assert not widget.feature_panel.isHidden()
+        assert widget.title_bar.isHidden()
+        assert widget.media_feature_play_btn.text() == "❚❚"
+    finally:
+        widget.worker.shutdown()
+        widget.media_worker.shutdown()
+        widget.worker.wait(2000)
+        widget.media_worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_interrupted_expand_does_not_reveal_stale_content():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:

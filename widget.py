@@ -1164,6 +1164,13 @@ class JarvisWidget(QWidget):
 
     def _present_compact(self, size, duration=None):
         """Reveal or morph a compact activity around a fixed screen center."""
+        # Compact and expanded surfaces are mutually exclusive.  Keeping this
+        # invariant here prevents late media-session updates from stacking the
+        # compact header above an already-visible expanded player.
+        self.feature_panel.hide()
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.title_bar.show()
         self._visibility_generation += 1
         self._is_hiding = False
         was_hidden = self.isHidden() or self._auto_hidden or self.windowOpacity() < 0.1
@@ -1294,6 +1301,7 @@ class JarvisWidget(QWidget):
         # minimize click near the top center can instantly reopen the island.
         self._hot_zone_armed = False
         self.is_expanded = False
+        self.feature_panel.hide()
         self.title_bar.show()
         self._auto_hidden = True
         self._hover_leave_at = None
@@ -1497,6 +1505,7 @@ class JarvisWidget(QWidget):
 
     def _show_feature_content(self):
         if self.is_expanded and self._expanded_view == "feature":
+            self.title_bar.setVisible(not bool(self._media))
             self.feature_panel.show()
 
     def expand_feature(self):
@@ -1579,8 +1588,6 @@ class JarvisWidget(QWidget):
         self._auto_hidden = False
         self._media_manually_hidden = False
         self.is_expanded = False
-        self.scroll_area.hide()
-        self.input_frame.hide()
         self._present_compact(self._compact_size())
 
     def _pulse_media_indicator(self):
@@ -2365,7 +2372,15 @@ class JarvisWidget(QWidget):
             if self._assistant_state == "Idle" and not self._call_context:
                 self._collapse_timer.start(1800)
         if playing_now and not was_playing:
-            self.activate_media_island()
+            if self.is_expanded and self._expanded_view == "feature":
+                # A play action inside the expanded player must update it in
+                # place, not resurrect the compact header underneath it.
+                self.title_bar.hide()
+                self.feature_panel.show()
+                self._update_media_feature_panel()
+                self._keep_feature_open()
+            else:
+                self.activate_media_island()
         elif (not playing_now and not self._call_context and
               (was_playing or (self._media and not self._auto_hidden
                                and not self._media_manually_hidden))):
