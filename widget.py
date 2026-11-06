@@ -344,8 +344,14 @@ class MediaSessionWorker(QThread):
         )
         manager = await SessionManager.request_async()
         previous = None
+        next_metadata_poll = 0.0
+        cached_artwork_key = None
+        cached_artwork = b""
         while not self.shutdown_event.is_set():
             session = manager.get_current_session()
+            # Commands are intentionally serviced independently from the
+            # heavier metadata poll.  The former two-second combined loop made
+            # play/pause/seek feel unresponsive.
             while session and not self.actions.empty():
                 queued = self.actions.get_nowait()
                 action, value = queued if isinstance(queued, tuple) else (queued, None)
@@ -362,32 +368,41 @@ class MediaSessionWorker(QThread):
                 elif action == "seek" and value is not None:
                     await session.try_change_playback_position_async(
                         int(max(0.0, float(value)) * 10_000_000))
-            current = {}
-            if session:
-                try:
-                    props = await session.try_get_media_properties_async()
-                    info = session.get_playback_info()
-                    timeline = session.get_timeline_properties()
-                    start = self._duration_seconds(timeline.start_time)
-                    end = self._duration_seconds(timeline.end_time)
-                    position = max(0.0, self._duration_seconds(timeline.position) - start)
-                    duration = max(0.0, end - start)
-                    artwork = await self._read_thumbnail(props.thumbnail)
-                    current = {
-                        "title": (props.title or "Now playing").strip(),
-                        "artist": (props.artist or props.album_artist or "").strip(),
-                        "app": session.source_app_user_model_id or "Media",
-                        "playing": info.playback_status == PlaybackStatus.PLAYING,
-                        "artwork": artwork,
-                        "position": position,
-                        "duration": duration,
-                    }
-                except Exception:
-                    current = {}
-            if current != previous:
-                previous = current
-                self.media_changed.emit(current)
-            await asyncio.sleep(2.0)
+            now = asyncio.get_running_loop().time()
+            if now >= next_metadata_poll:
+                next_metadata_poll = now + 0.45
+                current = {}
+                if session:
+                    try:
+                        props = await session.try_get_media_properties_async()
+                        info = session.get_playback_info()
+                        timeline = session.get_timeline_properties()
+                        start = self._duration_seconds(timeline.start_time)
+                        end = self._duration_seconds(timeline.end_time)
+                        position = max(0.0, self._duration_seconds(timeline.position) - start)
+                        duration = max(0.0, end - start)
+                        artwork_key = (
+                            props.title, props.artist, props.album_artist,
+                            session.source_app_user_model_id,
+                        )
+                        if artwork_key != cached_artwork_key:
+                            cached_artwork = await self._read_thumbnail(props.thumbnail)
+                            cached_artwork_key = artwork_key
+                        current = {
+                            "title": (props.title or "Now playing").strip(),
+                            "artist": (props.artist or props.album_artist or "").strip(),
+                            "app": session.source_app_user_model_id or "Media",
+                            "playing": info.playback_status == PlaybackStatus.PLAYING,
+                            "artwork": cached_artwork,
+                            "position": position,
+                            "duration": duration,
+                        }
+                    except Exception:
+                        current = {}
+                if current != previous:
+                    previous = current
+                    self.media_changed.emit(current)
+            await asyncio.sleep(0.05)
 
     @staticmethod
     def _duration_seconds(value):
@@ -1557,6 +1572,11 @@ class JarvisWidget(QWidget):
             self._feature_collapse_timer.start(5500)
 
     def _control_expanded_media(self, action):
+        if action == "play_pause" and self._media:
+            # Give immediate visual feedback while Windows processes the GSMTC
+            # command, then reconcile with the next authoritative poll.
+            self._media["playing"] = not bool(self._media.get("playing"))
+            self._update_media_feature_panel()
         self.media_worker.control(action)
         self._keep_feature_open()
 

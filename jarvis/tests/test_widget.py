@@ -563,6 +563,12 @@ def test_compact_click_opens_feature_before_dexget_ai():
         assert widget.input_frame.isHidden()
         assert widget._feature_collapse_timer.isActive()
 
+        with patch.object(widget.media_worker, "control") as control:
+            widget._control_expanded_media("play_pause")
+            control.assert_called_once_with("play_pause")
+            assert not widget._media["playing"]
+            assert not widget.media_feature_play_btn.playing
+
         widget._auto_collapse_feature()
         assert not widget.is_expanded
         assert widget.feature_panel.isHidden()
