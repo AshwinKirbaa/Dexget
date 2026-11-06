@@ -462,6 +462,9 @@ class JarvisWidget(QWidget):
         self._call_hide_timer = QTimer(self)
         self._call_hide_timer.setSingleShot(True)
         self._call_hide_timer.timeout.connect(self.hide_call_island)
+        self._feature_collapse_timer = QTimer(self)
+        self._feature_collapse_timer.setSingleShot(True)
+        self._feature_collapse_timer.timeout.connect(self._auto_collapse_feature)
         self.initUI()
         # Copilot/startup presents only the compact island. The conversation
         # panel opens later when the user clicks the island.
@@ -1137,6 +1140,7 @@ class JarvisWidget(QWidget):
             )
 
     def collapse_island(self):
+        self._feature_collapse_timer.stop()
         if not hasattr(self, "worker") or self.worker.busy.is_set() or not self.confirmation_panel.isHidden():
             return
         if self.input_field.hasFocus() and self.input_field.text():
@@ -1336,9 +1340,25 @@ class JarvisWidget(QWidget):
                 and generation == self._transition_generation)
             else None,
         )
+        self._feature_collapse_timer.start(5500)
+
+    def _auto_collapse_feature(self):
+        """Return a temporary feature surface to its compact live activity."""
+        if not self.is_expanded or self._expanded_view != "feature":
+            return
+        self.is_expanded = False
+        self.feature_panel.hide()
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS)
+        if self._call_context and not self._media:
+            self._call_hide_timer.start(4500)
+        elif not self._media and self._assistant_state == "Idle":
+            self._collapse_timer.start(1400)
 
     def open_ai_panel(self):
         """Switch from a feature surface to the automation conversation."""
+        self._feature_collapse_timer.stop()
         self._expanded_view = "ai"
         self.feature_panel.hide()
         self.scroll_opacity.setOpacity(0.0)

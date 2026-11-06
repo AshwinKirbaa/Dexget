@@ -550,6 +550,15 @@ def test_compact_click_opens_feature_before_dexget_ai():
         assert widget.feature_title.text() == "Purpose Is Glorious"
         assert widget.scroll_area.isHidden()
         assert widget.input_frame.isHidden()
+        assert widget._feature_collapse_timer.isActive()
+
+        widget._auto_collapse_feature()
+        assert not widget.is_expanded
+        assert widget.feature_panel.isHidden()
+
+        widget.expand_feature()
+        widget._animation.setCurrentTime(widget._animation.duration())
+        widget._show_feature_content()
 
         widget.open_ai_panel()
         widget._animation.setCurrentTime(widget._animation.duration())
@@ -559,6 +568,7 @@ def test_compact_click_opens_feature_before_dexget_ai():
         assert widget.feature_panel.isHidden()
         assert not widget.scroll_area.isHidden()
         assert not widget.input_frame.isHidden()
+        assert not widget._feature_collapse_timer.isActive()
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()
