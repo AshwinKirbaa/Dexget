@@ -8,7 +8,7 @@ import glob
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout, 
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                              QFrame, QSizePolicy, QGraphicsDropShadowEffect,
-                             QGraphicsOpacityEffect)
+                             QGraphicsOpacityEffect, QSlider)
 from PyQt6.QtCore import (Qt, QPoint, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QParallelAnimationGroup, QVariantAnimation,
@@ -272,7 +272,8 @@ class MediaSessionWorker(QThread):
         while not self.shutdown_event.is_set():
             session = manager.get_current_session()
             while session and not self.actions.empty():
-                action = self.actions.get_nowait()
+                queued = self.actions.get_nowait()
+                action, value = queued if isinstance(queued, tuple) else (queued, None)
                 if action == "previous":
                     await session.try_skip_previous_async()
                 elif action == "next":
@@ -283,11 +284,19 @@ class MediaSessionWorker(QThread):
                         await session.try_pause_async()
                     else:
                         await session.try_play_async()
+                elif action == "seek" and value is not None:
+                    await session.try_change_playback_position_async(
+                        int(max(0.0, float(value)) * 10_000_000))
             current = {}
             if session:
                 try:
                     props = await session.try_get_media_properties_async()
                     info = session.get_playback_info()
+                    timeline = session.get_timeline_properties()
+                    start = self._duration_seconds(timeline.start_time)
+                    end = self._duration_seconds(timeline.end_time)
+                    position = max(0.0, self._duration_seconds(timeline.position) - start)
+                    duration = max(0.0, end - start)
                     artwork = await self._read_thumbnail(props.thumbnail)
                     current = {
                         "title": (props.title or "Now playing").strip(),
@@ -295,6 +304,8 @@ class MediaSessionWorker(QThread):
                         "app": session.source_app_user_model_id or "Media",
                         "playing": info.playback_status == PlaybackStatus.PLAYING,
                         "artwork": artwork,
+                        "position": position,
+                        "duration": duration,
                     }
                 except Exception:
                     current = {}
@@ -302,6 +313,15 @@ class MediaSessionWorker(QThread):
                 previous = current
                 self.media_changed.emit(current)
             await asyncio.sleep(2.0)
+
+    @staticmethod
+    def _duration_seconds(value):
+        if hasattr(value, "total_seconds"):
+            return float(value.total_seconds())
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     async def _read_thumbnail(thumbnail):
@@ -324,8 +344,8 @@ class MediaSessionWorker(QThread):
         except Exception:
             return b""
 
-    def control(self, action):
-        self.actions.put(action)
+    def control(self, action, value=None):
+        self.actions.put((action, value) if value is not None else action)
 
     def shutdown(self):
         self.shutdown_event.set()
@@ -731,6 +751,96 @@ class JarvisWidget(QWidget):
         self.feature_detail = QLabel("Choose a feature or open Dexget AI.")
         self.feature_detail.setObjectName("FeatureDetail")
         self.feature_detail.setWordWrap(True)
+
+        # Dedicated expanded media player.  It is laid out before the window
+        # grows, so the island opens directly at its final Apple-style shape.
+        self.media_feature_widget = QFrame()
+        self.media_feature_widget.setObjectName("MediaFeaturePlayer")
+        self.media_feature_widget.setStyleSheet("""
+            QFrame#MediaFeaturePlayer { background: transparent; }
+            QLabel#MediaFeatureTitle { color: white; font-size: 15px; font-weight: 650; }
+            QLabel#MediaFeatureArtist { color: #aeb5bf; font-size: 11px; }
+            QLabel#MediaFeatureTime { color: #8d949e; font-size: 9px; }
+            QSlider::groove:horizontal { height: 4px; background: #4b5058; border-radius: 2px; }
+            QSlider::sub-page:horizontal { background: white; border-radius: 2px; }
+            QSlider::handle:horizontal { background: white; width: 10px; margin: -3px 0;
+                                         border-radius: 5px; }
+        """)
+        media_player_layout = QVBoxLayout(self.media_feature_widget)
+        media_player_layout.setContentsMargins(0, 0, 0, 0)
+        media_player_layout.setSpacing(8)
+        media_header = QHBoxLayout()
+        media_header.setSpacing(11)
+        self.media_feature_art = QLabel("♪")
+        self.media_feature_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.media_feature_art.setFixedSize(58, 58)
+        self.media_feature_art.setStyleSheet(
+            "background: #202329; border-radius: 10px; color: #8f99a6; font-size: 22px;")
+        media_identity = QVBoxLayout()
+        media_identity.setSpacing(2)
+        self.media_feature_title = QLabel("Now playing")
+        self.media_feature_title.setObjectName("MediaFeatureTitle")
+        self.media_feature_title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.media_feature_artist = QLabel("Media")
+        self.media_feature_artist.setObjectName("MediaFeatureArtist")
+        self.media_feature_artist.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        media_identity.addStretch()
+        media_identity.addWidget(self.media_feature_title)
+        media_identity.addWidget(self.media_feature_artist)
+        media_identity.addStretch()
+        self.media_feature_visualizer = QLabel("▮▰▮")
+        self.media_feature_visualizer.setStyleSheet(
+            "color: #55d6ff; font-size: 15px; font-weight: 700;")
+        media_header.addWidget(self.media_feature_art)
+        media_header.addLayout(media_identity, 1)
+        media_header.addWidget(self.media_feature_visualizer)
+        media_player_layout.addLayout(media_header)
+
+        timeline_layout = QHBoxLayout()
+        timeline_layout.setSpacing(7)
+        self.media_elapsed_label = QLabel("0:00")
+        self.media_elapsed_label.setObjectName("MediaFeatureTime")
+        self.media_seek_slider = QSlider(Qt.Orientation.Horizontal)
+        self.media_seek_slider.setRange(0, 0)
+        self.media_seek_slider.sliderReleased.connect(self._seek_expanded_media)
+        self.media_total_label = QLabel("0:00")
+        self.media_total_label.setObjectName("MediaFeatureTime")
+        timeline_layout.addWidget(self.media_elapsed_label)
+        timeline_layout.addWidget(self.media_seek_slider, 1)
+        timeline_layout.addWidget(self.media_total_label)
+        media_player_layout.addLayout(timeline_layout)
+
+        media_controls = QHBoxLayout()
+        media_controls.setSpacing(19)
+        media_controls.addStretch()
+        self.media_feature_previous_btn = QPushButton("|◀")
+        self.media_feature_play_btn = QPushButton("▶")
+        self.media_feature_next_btn = QPushButton("▶|")
+        for button in (self.media_feature_previous_btn, self.media_feature_play_btn,
+                       self.media_feature_next_btn):
+            button.setFixedSize(42, 38)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setStyleSheet("""
+                QPushButton { color: white; background: transparent; border: none;
+                              font-size: 20px; font-weight: 700; }
+                QPushButton:hover { background: rgba(255,255,255,18); border-radius: 19px; }
+                QPushButton:pressed { color: #8ddcff; }
+            """)
+        self.media_feature_play_btn.setStyleSheet(self.media_feature_play_btn.styleSheet() +
+            "QPushButton { background: rgba(255,255,255,20); border-radius: 19px; }")
+        self.media_feature_previous_btn.clicked.connect(
+            lambda: self._control_expanded_media("previous"))
+        self.media_feature_play_btn.clicked.connect(
+            lambda: self._control_expanded_media("play_pause"))
+        self.media_feature_next_btn.clicked.connect(
+            lambda: self._control_expanded_media("next"))
+        media_controls.addWidget(self.media_feature_previous_btn)
+        media_controls.addWidget(self.media_feature_play_btn)
+        media_controls.addWidget(self.media_feature_next_btn)
+        media_controls.addStretch()
+        media_player_layout.addLayout(media_controls)
+        self.media_feature_widget.hide()
+
         feature_actions = QHBoxLayout()
         feature_actions.setSpacing(8)
         self.feature_primary_btn = QPushButton("Screen Assist")
@@ -753,6 +863,7 @@ class JarvisWidget(QWidget):
         feature_layout.addWidget(self.feature_eyebrow)
         feature_layout.addWidget(self.feature_title)
         feature_layout.addWidget(self.feature_detail)
+        feature_layout.addWidget(self.media_feature_widget)
         feature_layout.addStretch()
         feature_layout.addLayout(feature_actions)
         self.feature_panel.hide()
@@ -1149,6 +1260,7 @@ class JarvisWidget(QWidget):
             self.hide_idle_island()
             return
         self.is_expanded = False
+        self.title_bar.show()
         self.scroll_area.hide()
         self.input_frame.hide()
         self.feature_panel.hide()
@@ -1181,6 +1293,7 @@ class JarvisWidget(QWidget):
         # minimize click near the top center can instantly reopen the island.
         self._hot_zone_armed = False
         self.is_expanded = False
+        self.title_bar.show()
         self._auto_hidden = True
         self._hover_leave_at = None
         self.scroll_area.hide()
@@ -1308,6 +1421,68 @@ class JarvisWidget(QWidget):
         self.feature_detail.setText(detail)
         self.feature_primary_btn.setText(action_text)
         self._feature_action = action
+        media_mode = bool(self._media)
+        for widget in (self.feature_eyebrow, self.feature_title,
+                       self.feature_detail, self.feature_primary_btn):
+            widget.setVisible(not media_mode)
+        self.media_feature_widget.setVisible(media_mode)
+        if media_mode:
+            self._update_media_feature_panel()
+
+    @staticmethod
+    def _format_media_time(seconds):
+        seconds = max(0, int(seconds or 0))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return (f"{hours}:{minutes:02d}:{seconds:02d}" if hours
+                else f"{minutes}:{seconds:02d}")
+
+    def _update_media_feature_panel(self):
+        if not self._media:
+            return
+        title = self._media.get("title") or "Now playing"
+        artist = self._media.get("artist") or self._media.get("app") or "Media"
+        self.media_feature_title.setText(title)
+        self.media_feature_title.setToolTip(title)
+        self.media_feature_artist.setText(artist)
+        self.media_feature_artist.setToolTip(artist)
+        playing = bool(self._media.get("playing"))
+        self.media_feature_play_btn.setText("❚❚" if playing else "▶")
+        self.media_feature_visualizer.setText("▮▰▮" if playing else "▮▮▮")
+        self.media_feature_visualizer.setStyleSheet(
+            f"color: {'#55d6ff' if playing else '#7b838d'}; font-size: 15px; font-weight: 700;")
+        position = max(0, int(self._media.get("position") or 0))
+        duration = max(position, int(self._media.get("duration") or 0))
+        if not self.media_seek_slider.isSliderDown():
+            self.media_seek_slider.setRange(0, duration)
+            self.media_seek_slider.setValue(min(position, duration))
+        self.media_elapsed_label.setText(self._format_media_time(position))
+        self.media_total_label.setText(self._format_media_time(duration))
+        artwork = self._media.get("artwork") or b""
+        pixmap = QPixmap()
+        if artwork and pixmap.loadFromData(artwork):
+            self.media_feature_art.setPixmap(pixmap.scaled(
+                self.media_feature_art.size(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation))
+            self.media_feature_art.setText("")
+        else:
+            self.media_feature_art.setPixmap(QPixmap())
+            self.media_feature_art.setText("♪")
+
+    def _keep_feature_open(self):
+        if self.is_expanded and self._expanded_view == "feature":
+            self._feature_collapse_timer.start(5500)
+
+    def _control_expanded_media(self, action):
+        self.media_worker.control(action)
+        self._keep_feature_open()
+
+    def _seek_expanded_media(self):
+        self.media_worker.control("seek", self.media_seek_slider.value())
+        self.media_elapsed_label.setText(
+            self._format_media_time(self.media_seek_slider.value()))
+        self._keep_feature_open()
 
     def _run_feature_action(self):
         if self._feature_action:
@@ -1331,6 +1506,9 @@ class JarvisWidget(QWidget):
         self.input_frame.hide()
         self.feature_panel.hide()
         self._prepare_feature_panel()
+        # The expanded player is a single unified surface; do not stack the
+        # compact media pill above it and duplicate artwork/title/controls.
+        self.title_bar.setVisible(not bool(self._media))
         generation = self._animate_to(
             self._feature_expanded_size(), self.PANEL_TRANSITION_MS)
         QTimer.singleShot(
@@ -1348,6 +1526,7 @@ class JarvisWidget(QWidget):
             return
         self.is_expanded = False
         self.feature_panel.hide()
+        self.title_bar.show()
         self.scroll_area.hide()
         self.input_frame.hide()
         self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS)
@@ -1361,6 +1540,7 @@ class JarvisWidget(QWidget):
         self._feature_collapse_timer.stop()
         self._expanded_view = "ai"
         self.feature_panel.hide()
+        self.title_bar.show()
         self.scroll_opacity.setOpacity(0.0)
         self.input_opacity.setOpacity(0.0)
         generation = self._animate_to(self._expanded_size(), self.PANEL_TRANSITION_MS)
@@ -2123,6 +2303,11 @@ class JarvisWidget(QWidget):
     def update_media(self, media):
         previous_key = self._last_media_key
         was_playing = bool(self._media.get("playing"))
+        previous_display = (
+            self._media.get("title"), self._media.get("artist"),
+            self._media.get("app"), self._media.get("playing"),
+            self._media.get("artwork"),
+        )
         self._media = media or {}
         playing_now = False
         if self._media:
@@ -2159,6 +2344,8 @@ class JarvisWidget(QWidget):
                 f"color: {'#55d6ff' if playing else '#ffb347'}; font-size: 15px;"
             )
             self._set_media_controls_visible(True)
+            if self.is_expanded and self._expanded_view == "feature":
+                self._update_media_feature_panel()
         else:
             self._media_pulse_timer.stop()
             self._last_media_key = None
@@ -2177,7 +2364,16 @@ class JarvisWidget(QWidget):
               (was_playing or (self._media and not self._auto_hidden
                                and not self._media_manually_hidden))):
             self.hide_media_island()
-        elif not self.is_expanded and not self._media_manually_hidden:
+        current_display = (
+            self._media.get("title"), self._media.get("artist"),
+            self._media.get("app"), self._media.get("playing"),
+            self._media.get("artwork"),
+        )
+        if (not playing_now and was_playing and self.is_expanded
+                and self._expanded_view == "feature"):
+            self._auto_collapse_feature()
+        elif (not self.is_expanded and not self._media_manually_hidden
+              and current_display != previous_display):
             # Track changes resize once to the final content-aware width.
             # The old grow-then-settle bump caused a visible double resize.
             self._animate_to(self._compact_size())

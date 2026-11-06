@@ -537,6 +537,8 @@ def test_compact_click_opens_feature_before_dexget_ai():
             "artist": "Natalie Holt",
             "app": "YouTube Music",
             "playing": True,
+            "position": 42,
+            "duration": 189,
         })
         widget.toggle_island()
         widget._animation.setCurrentTime(widget._animation.duration())
@@ -548,6 +550,13 @@ def test_compact_click_opens_feature_before_dexget_ai():
         assert not widget.feature_panel.isHidden()
         assert widget.feature_eyebrow.text() == "NOW PLAYING"
         assert widget.feature_title.text() == "Purpose Is Glorious"
+        assert not widget.media_feature_widget.isHidden()
+        assert widget.media_feature_title.text() == "Purpose Is Glorious"
+        assert widget.media_feature_artist.text() == "Natalie Holt"
+        assert widget.media_elapsed_label.text() == "0:42"
+        assert widget.media_total_label.text() == "3:09"
+        assert widget.media_seek_slider.value() == 42
+        assert widget.media_seek_slider.maximum() == 189
         assert widget.scroll_area.isHidden()
         assert widget.input_frame.isHidden()
         assert widget._feature_collapse_timer.isActive()
