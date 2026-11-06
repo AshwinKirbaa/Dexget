@@ -469,6 +469,16 @@ def test_call_layout_is_contextual_and_controls_microphone():
         assert widget._call_context is None
         assert widget.call_mute_btn.isHidden()
         assert not widget.screen_assist_btn.isHidden()
+
+        # A background Discord capability record must not claim the island
+        # unless Discord was the foreground app when live use began.
+        widget._foreground_title = "Codex"
+        widget._foreground_process = "codex.exe"
+        with patch.object(widget, "_active_microphone_clients",
+                          return_value={r"microphone\\nonpackaged\\discord.exe"}):
+            widget._check_call_context()
+        assert widget._call_context is None
+        assert widget.call_mute_btn.isHidden()
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()

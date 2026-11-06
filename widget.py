@@ -1326,7 +1326,10 @@ class JarvisWidget(QWidget):
                     stop = int(winreg.QueryValueEx(key, "LastUsedTimeStop")[0])
                 except OSError:
                     stop = 0
-                if start > 0 and (stop == 0 or start > stop):
+                # Windows documents LastUsedTimeStop == 0 as the live-use
+                # marker. Comparing start/stop timestamps also catches stale
+                # history left by apps such as Discord after a call ends.
+                if start > 0 and stop == 0:
                     active.add(path.lower())
             except (OSError, TypeError, ValueError):
                 pass
@@ -1362,21 +1365,26 @@ class JarvisWidget(QWidget):
             ("Zoom", ("zoom",)),
             ("Telegram", ("telegram",)),
         )
-        for label, tokens in candidates:
-            if any(token in clients for token in tokens):
-                return label
+        active_labels = {
+            label for label, tokens in candidates
+            if any(token in clients for token in tokens)
+        }
+        # Once a call has been positively identified, keep its controls while
+        # the same app retains live microphone access even if the user changes
+        # windows. Initial activation is stricter and must match the foreground
+        # app, preventing background/tray apps from claiming the island.
+        if self._call_context in active_labels:
+            return self._call_context
         browser_active = any(token in clients for token in (
             "chrome", "msedge", "brave", "firefox", "opera"))
         if browser_active and ("google meet" in title or "meet -" in title
                                or "meet.google" in title):
             return "Google Meet"
-        # Some packaged calling clients expose only a generic capability key;
-        # require both microphone use and an identifiable foreground window.
-        if clients:
-            combined = f"{process} {title}"
-            for label, tokens in candidates:
-                if any(token.replace(".exe", "") in combined for token in tokens):
-                    return label
+        combined = f"{process} {title}"
+        for label, tokens in candidates:
+            if label in active_labels and any(
+                    token.replace(".exe", "") in combined for token in tokens):
+                return label
         return None
 
     def _check_call_context(self):
