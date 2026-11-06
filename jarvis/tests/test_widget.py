@@ -465,7 +465,8 @@ def test_call_layout_is_contextual_and_controls_microphone():
         assert widget.status_label.text() == "Microphone muted"
 
         with patch.object(widget, "_active_microphone_clients", return_value=set()):
-            widget._check_call_context()
+            for _ in range(3):
+                widget._check_call_context()
         assert widget._call_context is None
         assert widget.call_mute_btn.isHidden()
         assert not widget.screen_assist_btn.isHidden()
@@ -495,6 +496,27 @@ def test_call_layout_is_contextual_and_controls_microphone():
         assert widget._call_context == "Discord"
         assert widget.name_label.text() == "Discord Call"
         assert not widget.call_mute_btn.isHidden()
+        assert not widget._auto_hidden
+        assert widget._call_hide_timer.isActive()
+
+        widget.hide_call_island()
+        widget._animation.setCurrentTime(widget._animation.duration())
+        app.processEvents()
+        assert widget.isHidden()
+        assert widget._call_context == "Discord"
+
+        widget.reveal_idle_island()
+        app.processEvents()
+        assert not widget.isHidden()
+        assert widget._call_hide_timer.isActive()
+
+        # A transient microphone ownership gap must not hide an established
+        # call activity; the third consecutive miss ends it.
+        with patch.object(widget, "_active_microphone_clients", return_value=set()):
+            widget._check_call_context()
+            widget._check_call_context()
+        assert widget._call_context == "Discord"
+        assert not widget.isHidden()
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()

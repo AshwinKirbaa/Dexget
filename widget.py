@@ -407,6 +407,7 @@ class JarvisWidget(QWidget):
         self._foreground_process = ""
         self._call_context = None
         self._call_muted = False
+        self._call_miss_count = 0
         self._discord_log_path = None
         self._discord_log_offset = 0
         self._discord_rtc_active = False
@@ -455,6 +456,9 @@ class JarvisWidget(QWidget):
         self._call_timer.setInterval(2000)
         self._call_timer.timeout.connect(self._check_call_context)
         self._call_timer.start()
+        self._call_hide_timer = QTimer(self)
+        self._call_hide_timer.setSingleShot(True)
+        self._call_hide_timer.timeout.connect(self.hide_call_island)
         self.initUI()
         # Copilot/startup presents only the compact island. The conversation
         # panel opens later when the user clicks the island.
@@ -1104,6 +1108,9 @@ class JarvisWidget(QWidget):
 
     def hide_media_island(self):
         """Hide the UI without stopping either background worker."""
+        if self._call_context and not self._media:
+            self._refresh_call_layout()
+            return
         self._media_manually_hidden = True
         self._is_hiding = True
         # Require the pointer to leave and re-enter the hot zone. Otherwise a
@@ -1140,6 +1147,9 @@ class JarvisWidget(QWidget):
 
     def _complete_media_hide(self):
         self._is_hiding = False
+        if self._call_context and not self._media:
+            self._refresh_call_layout()
+            return
         if self._auto_hidden:
             self.hide()
             # Restore while hidden so the next reveal starts fully formed.
@@ -1158,6 +1168,8 @@ class JarvisWidget(QWidget):
         self._media_manually_hidden = False
         self._hover_leave_at = None
         self._present_compact(self._compact_size())
+        if self._call_context and not self._media:
+            self._call_hide_timer.start(4500)
 
     def _check_hot_zone(self):
         if (self._is_hiding or self.is_expanded or self.worker.busy.is_set()
@@ -1436,6 +1448,16 @@ class JarvisWidget(QWidget):
 
     def _check_call_context(self):
         application = self._detect_call_application()
+        if application:
+            self._call_miss_count = 0
+        elif self._call_context:
+            # CapabilityAccessManager may briefly drop microphone ownership
+            # between Discord/WebRTC capture transitions. Require three
+            # consecutive misses before ending an established call activity.
+            self._call_miss_count += 1
+            if self._call_miss_count < 3:
+                return
+            self._call_miss_count = 0
         if application == self._call_context:
             if (application and self.call_mute_btn.isHidden() and not self._media
                     and not self._notification_active and not self._charging_active
@@ -1451,6 +1473,8 @@ class JarvisWidget(QWidget):
                     or self._low_power_active or self._headset_active):
                 return
             self._collapse_timer.stop()
+            self._auto_hidden = False
+            self._is_hiding = False
             self._media_manually_hidden = False
             self.name_label.setText(f"{self._call_context} Call")
             self.status_label.setText(
@@ -1462,7 +1486,9 @@ class JarvisWidget(QWidget):
             self.screen_assist_btn.hide()
             if not self.is_expanded:
                 self._present_compact(self.CALL_SIZE)
+                self._call_hide_timer.start(4500)
             return
+        self._call_hide_timer.stop()
         self.call_mute_btn.hide()
         self.screen_assist_btn.show()
         if not self._media:
@@ -1472,6 +1498,42 @@ class JarvisWidget(QWidget):
             if not self.is_expanded:
                 self._animate_to(self.COLLAPSED_SIZE)
                 self._collapse_timer.start(1400)
+
+    def hide_call_island(self):
+        """Minimize a call activity while continuing to track the call."""
+        if (not self._call_context or self._media or self.is_expanded
+                or self.worker.busy.is_set() or self._notification_active
+                or self._charging_active or self._low_power_active
+                or self._headset_active):
+            return
+        self._is_hiding = True
+        self._auto_hidden = True
+        self._hot_zone_armed = False
+        self._hover_leave_at = None
+        self._visibility_generation += 1
+        generation = self._visibility_generation
+        self._animate_surface_to(
+            self.MINIMIZE_SIZE,
+            self.COMPACT_TRANSITION_MS,
+            on_finished=self._complete_call_hide,
+            commit_window=False,
+            start_size=QSize(self.size()),
+            fade_title_bar=True,
+            hide_before_final_frame=True,
+        )
+        QTimer.singleShot(
+            self.COMPACT_TRANSITION_MS + 80,
+            lambda: self._complete_call_hide()
+            if (generation == self._visibility_generation and self._auto_hidden)
+            else None,
+        )
+
+    def _complete_call_hide(self):
+        self._is_hiding = False
+        if self._auto_hidden and self._call_context and not self._media:
+            self.hide()
+            self.title_bar_opacity.setOpacity(1.0)
+            self._reset_container_constraints()
 
     @staticmethod
     def _set_input_muted(muted):
@@ -1932,11 +1994,14 @@ class JarvisWidget(QWidget):
         else:
             self._media_pulse_timer.stop()
             self._last_media_key = None
-            self.name_label.setText("DEXGET")
-            self.status_label.setText(self._assistant_subtitle[:70])
-            self.status_label.setToolTip(self._assistant_subtitle)
             self._set_media_controls_visible(False)
-            if self._assistant_state == "Idle":
+            if self._call_context:
+                self._refresh_call_layout()
+            else:
+                self.name_label.setText("DEXGET")
+                self.status_label.setText(self._assistant_subtitle[:70])
+                self.status_label.setToolTip(self._assistant_subtitle)
+            if self._assistant_state == "Idle" and not self._call_context:
                 self._collapse_timer.start(1800)
         if playing_now and not was_playing:
             self.activate_media_island()
