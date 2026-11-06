@@ -496,6 +496,12 @@ class JarvisWidget(QWidget):
         # --- Title Bar (Draggable) ---
         self.title_bar = QFrame()
         self.title_bar.setFixedHeight(48)
+        # Keep compact-bar contents on one composited layer. During a hide
+        # transition that layer fades before the surface becomes too narrow,
+        # so Qt never visibly reflows the cover and controls into a pile.
+        self.title_bar_opacity = QGraphicsOpacityEffect(self.title_bar)
+        self.title_bar_opacity.setOpacity(1.0)
+        self.title_bar.setGraphicsEffect(self.title_bar_opacity)
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(14, 0, 12, 0)
 
@@ -874,7 +880,7 @@ class JarvisWidget(QWidget):
     def _animate_surface_to(self, size, duration=None,
                             curve=QEasingCurve.Type.OutCubic,
                             on_finished=None, commit_window=True,
-                            start_size=None):
+                            start_size=None, fade_title_bar=False):
         """Morph the visible island without resizing its native window per frame."""
         duration = duration or self.COMPACT_TRANSITION_MS
         target = self._target_geometry(size)
@@ -907,6 +913,12 @@ class JarvisWidget(QWidget):
             height = round(start_size.height() +
                            (size.height() - start_size.height()) * progress)
             self.container.setFixedSize(width, height)
+            if fade_title_bar:
+                # Finish the content fade in the first 28% of the morph. The
+                # remainder is a clean black pill contracting around its
+                # centre, rather than controls being relaid out every frame.
+                self.title_bar_opacity.setOpacity(
+                    max(0.0, 1.0 - (progress / 0.28)))
             self.main_layout.activate()
 
         def finish_surface():
@@ -942,6 +954,7 @@ class JarvisWidget(QWidget):
             self._animation.stop()
         self._reset_container_constraints()
         self._animation_target = None
+        self.title_bar_opacity.setOpacity(1.0)
         self.setWindowOpacity(1.0)
         if was_hidden:
             start = QSize(self.MINIMIZE_SIZE)
@@ -1069,6 +1082,7 @@ class JarvisWidget(QWidget):
             on_finished=self._complete_media_hide,
             commit_window=False,
             start_size=QSize(self.size()),
+            fade_title_bar=True,
         )
         # A guarded fallback covers animation-driver interruption (display
         # sleep, shell restart, or Qt event-loop replacement) without allowing
@@ -1084,6 +1098,8 @@ class JarvisWidget(QWidget):
         self._is_hiding = False
         if self._auto_hidden:
             self.hide()
+            # Restore while hidden so the next reveal starts fully formed.
+            self.title_bar_opacity.setOpacity(1.0)
             self._reset_container_constraints()
 
     def _reset_container_constraints(self):

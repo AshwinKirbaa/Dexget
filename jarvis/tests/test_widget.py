@@ -101,6 +101,7 @@ def test_dynamic_island_reacts_to_media_metadata():
         widget._animation.setCurrentTime(widget._animation.duration() // 2)
         assert widget.geometry() == starting_geometry
         assert widget.container.width() < starting_geometry.width()
+        assert widget.title_bar_opacity.opacity() == 0.0
         deadline = time.monotonic() + 1
         while not widget.isHidden() and time.monotonic() < deadline:
             app.processEvents()
