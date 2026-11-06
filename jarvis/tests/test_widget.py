@@ -439,6 +439,45 @@ def test_duplicate_resize_requests_do_not_restart_running_animation():
         app.processEvents()
 
 
+def test_call_layout_is_contextual_and_controls_microphone():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget._foreground_title = "Google Meet - Weekly call - Google Chrome"
+        widget._foreground_process = "chrome.exe"
+        with patch.object(widget, "_active_microphone_clients",
+                          return_value={r"microphone\\nonpackaged\\chrome.exe"}):
+            widget._check_call_context()
+        app.processEvents()
+        assert widget._call_context == "Google Meet"
+        assert widget.name_label.text() == "Google Meet Call"
+        assert not widget.call_mute_btn.isHidden()
+        assert widget.screen_assist_btn.isHidden()
+        assert widget._compact_size() == widget.CALL_SIZE
+
+        with patch.object(widget, "_set_input_muted", return_value=True) as setter:
+            widget.toggle_call_mute()
+        setter.assert_called_once_with(True)
+        assert widget._call_muted
+        assert widget.call_mute_btn.text() == "Unmute"
+        assert widget.status_label.text() == "Microphone muted"
+
+        with patch.object(widget, "_active_microphone_clients", return_value=set()):
+            widget._check_call_context()
+        assert widget._call_context is None
+        assert widget.call_mute_btn.isHidden()
+        assert not widget.screen_assist_btn.isHidden()
+    finally:
+        widget.worker.shutdown()
+        widget.media_worker.shutdown()
+        widget.worker.wait(2000)
+        widget.media_worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_interrupted_expand_does_not_reveal_stale_content():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:

@@ -364,6 +364,7 @@ class JarvisWidget(QWidget):
     LOW_POWER_SIZE = QSize(350, 56)
     HEADSET_SIZE = QSize(350, 56)
     NOTIFICATION_SIZE = QSize(370, 64)
+    CALL_SIZE = QSize(360, 52)
     MEDIA_MIN_WIDTH = 400
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
@@ -400,6 +401,10 @@ class JarvisWidget(QWidget):
         self._notification_listener = None
         self._known_notification_ids = set()
         self._last_external_hwnd = None
+        self._foreground_title = ""
+        self._foreground_process = ""
+        self._call_context = None
+        self._call_muted = False
         self.screen_assist_worker = None
         self._screen_context = None
         self._headset_active = False
@@ -441,6 +446,10 @@ class JarvisWidget(QWidget):
         self._foreground_timer.setInterval(750)
         self._foreground_timer.timeout.connect(self._track_foreground_window)
         self._foreground_timer.start()
+        self._call_timer = QTimer(self)
+        self._call_timer.setInterval(2000)
+        self._call_timer.timeout.connect(self._check_call_context)
+        self._call_timer.start()
         self.initUI()
         # Copilot/startup presents only the compact island. The conversation
         # panel opens later when the user clicks the island.
@@ -626,6 +635,20 @@ class JarvisWidget(QWidget):
             QPushButton:disabled { color: #59616b; }
         """)
         self.screen_assist_btn.clicked.connect(self.start_screen_assist)
+
+        self.call_mute_btn = QPushButton("Mute")
+        self.call_mute_btn.setToolTip("Mute this computer's microphone")
+        self.call_mute_btn.setFixedSize(64, 30)
+        self.call_mute_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        self.call_mute_btn.setStyleSheet("""
+            QPushButton { background: rgba(255, 255, 255, 18);
+                          border: 1px solid rgba(255, 255, 255, 32);
+                          border-radius: 15px; color: white; }
+            QPushButton:hover { background: rgba(255, 255, 255, 32); }
+            QPushButton:pressed { background: rgba(255, 69, 58, 70); }
+        """)
+        self.call_mute_btn.clicked.connect(self.toggle_call_mute)
+        self.call_mute_btn.hide()
         
         self.close_btn = QPushButton("✕")
         self.close_btn.setFixedSize(24, 24)
@@ -663,6 +686,7 @@ class JarvisWidget(QWidget):
         title_layout.addWidget(self.play_pause_btn)
         title_layout.addWidget(self.next_btn)
         title_layout.addWidget(self.media_hide_btn)
+        title_layout.addWidget(self.call_mute_btn)
         title_layout.addWidget(self.screen_assist_btn)
         title_layout.addWidget(self.close_btn)
         self._set_media_controls_visible(False)
@@ -854,6 +878,8 @@ class JarvisWidget(QWidget):
             return self.LOW_POWER_SIZE
         if self._charging_active:
             return self.CHARGING_SIZE
+        if self._call_context and not self._media:
+            return self.CALL_SIZE
         if not self._media:
             return self.COLLAPSED_SIZE
         title = self._media.get("title", "Now playing")
@@ -1058,6 +1084,7 @@ class JarvisWidget(QWidget):
 
     def hide_idle_island(self):
         if (self.worker.busy.is_set()
+                or self._call_context
                 or (self._media and self._media.get("playing") and not self._media_manually_hidden)
                 or not self.confirmation_panel.isHidden()):
             return
@@ -1265,8 +1292,154 @@ class JarvisWidget(QWidget):
             own_hwnd = int(self.winId())
             if hwnd and hwnd != own_hwnd:
                 self._last_external_hwnd = hwnd
+                length = int(ctypes.windll.user32.GetWindowTextLengthW(hwnd))
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
+                self._foreground_title = buffer.value
+                pid = ctypes.c_ulong()
+                ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                try:
+                    import psutil
+                    self._foreground_process = psutil.Process(pid.value).name()
+                except Exception:
+                    self._foreground_process = ""
         except Exception:
             pass
+
+    @staticmethod
+    def _active_microphone_clients():
+        """Return Windows capability entries currently using the microphone."""
+        try:
+            import winreg
+            root_path = (r"Software\Microsoft\Windows\CurrentVersion"
+                         r"\CapabilityAccessManager\ConsentStore\microphone")
+            root = winreg.OpenKey(winreg.HKEY_CURRENT_USER, root_path)
+        except Exception:
+            return set()
+
+        active = set()
+
+        def walk(key, path, depth=0):
+            try:
+                start = int(winreg.QueryValueEx(key, "LastUsedTimeStart")[0])
+                try:
+                    stop = int(winreg.QueryValueEx(key, "LastUsedTimeStop")[0])
+                except OSError:
+                    stop = 0
+                if start > 0 and (stop == 0 or start > stop):
+                    active.add(path.lower())
+            except (OSError, TypeError, ValueError):
+                pass
+            if depth >= 2:
+                return
+            index = 0
+            while True:
+                try:
+                    name = winreg.EnumKey(key, index)
+                    child = winreg.OpenKey(key, name)
+                    try:
+                        walk(child, f"{path}\\{name}", depth + 1)
+                    finally:
+                        child.Close()
+                    index += 1
+                except OSError:
+                    break
+
+        try:
+            walk(root, "microphone")
+        finally:
+            root.Close()
+        return active
+
+    def _detect_call_application(self):
+        clients = " ".join(self._active_microphone_clients())
+        title = self._foreground_title.lower()
+        process = self._foreground_process.lower()
+        candidates = (
+            ("Discord", ("discord",)),
+            ("WhatsApp", ("whatsapp",)),
+            ("Microsoft Teams", ("ms-teams", "msteams", "teams.exe")),
+            ("Zoom", ("zoom",)),
+            ("Telegram", ("telegram",)),
+        )
+        for label, tokens in candidates:
+            if any(token in clients for token in tokens):
+                return label
+        browser_active = any(token in clients for token in (
+            "chrome", "msedge", "brave", "firefox", "opera"))
+        if browser_active and ("google meet" in title or "meet -" in title
+                               or "meet.google" in title):
+            return "Google Meet"
+        # Some packaged calling clients expose only a generic capability key;
+        # require both microphone use and an identifiable foreground window.
+        if clients:
+            combined = f"{process} {title}"
+            for label, tokens in candidates:
+                if any(token.replace(".exe", "") in combined for token in tokens):
+                    return label
+        return None
+
+    def _check_call_context(self):
+        application = self._detect_call_application()
+        if application == self._call_context:
+            if (application and self.call_mute_btn.isHidden() and not self._media
+                    and not self._notification_active and not self._charging_active
+                    and not self._low_power_active and not self._headset_active):
+                self._refresh_call_layout()
+            return
+        self._call_context = application
+        self._refresh_call_layout()
+
+    def _refresh_call_layout(self):
+        if self._call_context:
+            if (self._media or self._notification_active or self._charging_active
+                    or self._low_power_active or self._headset_active):
+                return
+            self._collapse_timer.stop()
+            self._media_manually_hidden = False
+            self.name_label.setText(f"{self._call_context} Call")
+            self.status_label.setText(
+                "Microphone muted" if self._call_muted else "Microphone active")
+            self.status_dot.setStyleSheet(
+                f"color: {'#ff453a' if self._call_muted else '#30d158'}; font-size: 15px;")
+            self.call_mute_btn.setText("Unmute" if self._call_muted else "Mute")
+            self.call_mute_btn.show()
+            self.screen_assist_btn.hide()
+            if not self.is_expanded:
+                self._present_compact(self.CALL_SIZE)
+            return
+        self.call_mute_btn.hide()
+        self.screen_assist_btn.show()
+        if not self._media:
+            self.name_label.setText("DEXGET")
+            self.status_label.setText(self._assistant_subtitle[:70])
+            self.status_dot.setStyleSheet("color: #39e58c; font-size: 15px;")
+            if not self.is_expanded:
+                self._animate_to(self.COLLAPSED_SIZE)
+                self._collapse_timer.start(1400)
+
+    @staticmethod
+    def _set_input_muted(muted):
+        try:
+            from ctypes import POINTER, cast
+            from comtypes import CLSCTX_ALL
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            device = AudioUtilities.GetMicrophone()
+            interface = device.Activate(
+                IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            endpoint = cast(interface, POINTER(IAudioEndpointVolume))
+            endpoint.SetMute(bool(muted), None)
+            return True
+        except Exception:
+            return False
+
+    def toggle_call_mute(self):
+        target = not self._call_muted
+        if not self._set_input_muted(target):
+            self.status_label.setText("Could not change microphone")
+            return
+        self._call_muted = target
+        self._refresh_call_layout()
 
     @staticmethod
     def _proctoring_active():
@@ -1622,7 +1795,7 @@ class JarvisWidget(QWidget):
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        if not self.is_expanded and not self._media:
+        if not self.is_expanded and not self._media and not self._call_context:
             self._hover_leave_at = time.monotonic()
         super().leaveEvent(event)
 
@@ -1712,7 +1885,7 @@ class JarvisWidget(QWidget):
                 self._collapse_timer.start(1800)
         if playing_now and not was_playing:
             self.activate_media_island()
-        elif (not playing_now and
+        elif (not playing_now and not self._call_context and
               (was_playing or (self._media and not self._auto_hidden
                                and not self._media_manually_hidden))):
             self.hide_media_island()
