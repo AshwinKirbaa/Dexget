@@ -740,6 +740,8 @@ def test_timer_started_from_default_page_owns_compact_surface_over_media():
         assert widget._compact_size() == widget.TIMER_SIZE
         assert not widget.timer_status_widget.isHidden()
         assert widget.default_status_widget.isHidden()
+        assert widget.media_feature_widget.isHidden()
+        assert widget.dashboard_widget.isHidden()
         assert widget._media.get("title") == "SEM DEMORA (Slowed)"
     finally:
         widget.cancel_timer()

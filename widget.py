@@ -1675,6 +1675,14 @@ class JarvisWidget(QWidget):
         # do not leave the page override in place or it will inherit the
         # background media player's geometry and surface routing.
         self._default_page_override = False
+        self._expanded_view = "feature"
+        # Tear down any expanded media/dashboard content before presenting the
+        # timer activity.  This keeps the timer as a distinct island activity
+        # instead of leaving the previous media panel underneath it.
+        self.feature_panel.hide()
+        self.media_feature_widget.hide()
+        self.dashboard_widget.hide()
+        self.title_bar.show()
         self._timer_generation += 1
         self._timer_active = True
         self._timer_running = True
