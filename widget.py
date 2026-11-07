@@ -3443,7 +3443,7 @@ class JarvisWidget(QWidget):
 
     def _cycle_activity_page(self, direction):
         now = time.monotonic()
-        if now - self._last_page_switch < 0.28:
+        if now - self._last_page_switch < 0.12:
             return
         self._last_page_switch = now
         pages = ["default"]
@@ -3475,12 +3475,15 @@ class JarvisWidget(QWidget):
         if self._animation:
             self._animation.stop()
         self._transition_generation += 1
+        self.setUpdatesEnabled(False)
         self.is_expanded = False
         self.container.setFixedSize(size)
         self.main_layout.activate()
         self.setGeometry(self._target_geometry(size))
         self.main_layout.activate()
         self._apply_rounded_window_mask(size)
+        self.setUpdatesEnabled(True)
+        self.update()
         self.show()
 
     def _begin_page_swipe(self, event):
