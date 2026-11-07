@@ -767,6 +767,7 @@ def test_music_and_timer_are_switchable_activity_pages():
         assert widget._activity_page == "media"
         assert not widget.identity_widget.isHidden()
         assert widget.timer_status_widget.isHidden()
+        widget._last_page_switch = 0
         widget._cycle_activity_page(-1)
         assert widget._activity_page == "timer"
         assert not widget.timer_status_widget.isHidden()
