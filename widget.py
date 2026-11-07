@@ -1989,6 +1989,18 @@ class JarvisWidget(QWidget):
             self.container,
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self.main_layout.activate()
+        self._apply_rounded_window_mask(size)
+
+    def _apply_rounded_window_mask(self, size):
+        """Clip the settled native window to the same curve as its surface."""
+        if size.width() <= 0 or size.height() <= 0:
+            return
+        radius = min(size.height() / 2.0, 28.0)
+        path = QPainterPath()
+        path.addRoundedRect(
+            QRectF(0.0, 0.0, float(size.width()), float(size.height())),
+            radius, radius)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
     def _animate_to(self, size, duration=None, curve=QEasingCurve.Type.OutCubic):
         return self._animate_surface_to(size, duration, curve)
@@ -3317,9 +3329,9 @@ class JarvisWidget(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # WA_TranslucentBackground plus the rounded container already clips the
-        # visible pixels. Rebuilding a native HRGN mask for every geometry
-        # animation frame causes a black flash/flicker on Windows DWM.
+        # Clear the settled mask while morphing so Windows does not rebuild an
+        # HRGN on every animation frame. _reassert_centered_surface restores a
+        # single rounded native mask after the final geometry is established.
         if not self.mask().isEmpty():
             self.clearMask()
 
