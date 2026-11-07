@@ -2819,6 +2819,10 @@ class JarvisWidget(QWidget):
                 f"color: {'#55d6ff' if playing else '#ffb347'}; font-size: 15px;"
             )
             self._set_media_controls_visible(True)
+            # A running timer owns the compact island even if Windows keeps
+            # publishing media-session metadata in the background.
+            if self._timer_active:
+                self._sync_compact_surface()
             if self.is_expanded and self._expanded_view == "feature":
                 self._update_media_feature_panel()
                 if previous_key != self._last_media_key:
