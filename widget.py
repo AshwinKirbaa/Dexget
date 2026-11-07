@@ -8,7 +8,8 @@ import glob
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                         QFrame, QSizePolicy, QGraphicsDropShadowEffect, QInputDialog,
-                             QGraphicsOpacityEffect, QSlider, QGridLayout)
+                             QGraphicsOpacityEffect, QSlider, QGridLayout,
+                             QStackedWidget)
 from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QParallelAnimationGroup, QVariantAnimation,
@@ -482,7 +483,7 @@ class JarvisWidget(QWidget):
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
     FEATURE_EXPANDED_SIZE = QSize(440, 230)
-    DASHBOARD_EXPANDED_SIZE = QSize(440, 260)
+    DASHBOARD_EXPANDED_SIZE = QSize(850, 370)
     MEDIA_FEATURE_MIN_WIDTH = 390
     MEDIA_FEATURE_MAX_WIDTH = 560
     MEDIA_FEATURE_HEIGHT = 160
@@ -1004,73 +1005,247 @@ class JarvisWidget(QWidget):
         media_player_layout.addLayout(media_controls)
         self.media_feature_widget.hide()
 
+        # Full control-center dashboard inspired by the compact Windows
+        # Dynamic Island references: one cohesive black surface, contextual
+        # pages, and no nested legacy cards or duplicated title bar.
         self.dashboard_widget = QFrame()
+        self.dashboard_widget.setObjectName("Dashboard")
+        self.dashboard_widget.setStyleSheet("""
+            QFrame#Dashboard { background: transparent; }
+            QLabel { color: #f5f5f7; }
+            QPushButton { color: #d7d7dc; background: transparent; border: none;
+                          border-radius: 12px; padding: 7px 12px; font-size: 12px; }
+            QPushButton:hover { background: #202124; color: white; }
+            QPushButton:checked { background: #2b2c30; color: white; }
+            QLineEdit { color: white; background: #151517; border: none;
+                        border-radius: 11px; padding: 10px 14px; font-size: 13px; }
+            QSlider::groove:horizontal { height: 7px; background: #36373b;
+                                         border-radius: 3px; }
+            QSlider::sub-page:horizontal { background: #ffcf00; border-radius: 3px; }
+            QSlider::handle:horizontal { background: white; width: 18px;
+                                         margin: -6px 0; border-radius: 9px; }
+        """)
         dashboard_layout = QVBoxLayout(self.dashboard_widget)
-        dashboard_layout.setContentsMargins(0, 0, 0, 0)
-        dashboard_layout.setSpacing(10)
-        dashboard_title = QLabel("Quick widgets")
-        dashboard_title.setStyleSheet(
-            "color: white; font-size: 16px; font-weight: 700;")
-        dashboard_layout.addWidget(dashboard_title)
-        dashboard_grid = QGridLayout()
-        self.dashboard_grid = dashboard_grid
-        dashboard_grid.setHorizontalSpacing(8)
-        dashboard_grid.setVerticalSpacing(8)
-        self.dashboard_buttons = {}
-        actions = (
-            ("Timer", "Timer", self.prompt_timer),
-            ("Notes", "Notes", lambda: self._launch_program("notepad.exe")),
-            ("Screen", "Screen Assist", self.start_screen_assist),
-            ("Settings", "Customize", self._toggle_dashboard_settings),
-        )
-        for index, (key, text_value, callback) in enumerate(actions):
-            button = QPushButton(text_value)
-            button.setFixedHeight(42)
-            button.clicked.connect(callback)
-            button.setStyleSheet("""
-                QPushButton { color: white; background: rgba(255,255,255,18);
-                              border: 1px solid rgba(255,255,255,30);
-                              border-radius: 12px; padding: 0 14px; }
-                QPushButton:hover { background: rgba(90,180,255,45); }
-            """)
-            dashboard_grid.addWidget(button, index // 2, index % 2)
-            self.dashboard_buttons[key] = button
-        dashboard_layout.addLayout(dashboard_grid)
-        self.dashboard_added_widgets = {}
-        optional_actions = (
-            ("battery", "Battery settings", lambda: self._launch_uri("ms-settings:batterysaver")),
-            ("audio", "Audio settings", lambda: self._launch_uri("ms-settings:sound")),
-        )
-        settings_store = QSettings("Dexget", "DynamicIsland")
-        for column, (key, label_text, callback) in enumerate(optional_actions):
-            button = QPushButton(label_text)
-            button.setFixedHeight(38)
-            button.clicked.connect(callback)
-            button.setStyleSheet(
-                "QPushButton { color:#d7eaff; background:rgba(70,140,210,30);"
-                " border:1px solid rgba(100,180,255,45); border-radius:10px; }")
-            button.setVisible(bool(settings_store.value(
-                f"dashboard/{key}", False, type=bool)))
-            dashboard_grid.addWidget(button, 2, column)
-            self.dashboard_added_widgets[key] = button
-        self.dashboard_settings = QFrame()
-        settings_layout = QHBoxLayout(self.dashboard_settings)
+        dashboard_layout.setContentsMargins(8, 0, 8, 0)
+        dashboard_layout.setSpacing(8)
+
+        nav = QHBoxLayout()
+        nav.setSpacing(5)
+        self.dashboard_nav_buttons = {}
+        nav_items = (("home", "⌂"), ("clipboard", "▣"),
+                     ("tasks", "✓"), ("focus", "◷"))
+        for key, icon in nav_items:
+            button = QPushButton(icon)
+            button.setCheckable(True)
+            button.setFixedSize(40, 36)
+            button.setFont(QFont("Segoe UI Symbol", 16))
+            button.clicked.connect(lambda checked=False, page=key: self._show_dashboard_page(page))
+            nav.addWidget(button)
+            self.dashboard_nav_buttons[key] = button
+        nav.addStretch(1)
+        handle = QLabel("━━━━")
+        handle.setStyleSheet("color:#414247; font-size:13px;")
+        nav.addWidget(handle)
+        nav.addStretch(1)
+        for key, icon in (("search", "⌕"), ("alerts", "♢"), ("settings", "☷")):
+            button = QPushButton(icon)
+            button.setCheckable(key in ("search", "settings"))
+            button.setFixedSize(40, 36)
+            button.setFont(QFont("Segoe UI Symbol", 16))
+            if key == "alerts":
+                button.clicked.connect(lambda: self._launch_uri("ms-settings:notifications"))
+            else:
+                button.clicked.connect(lambda checked=False, page=key: self._show_dashboard_page(page))
+                self.dashboard_nav_buttons[key] = button
+            nav.addWidget(button)
+        dashboard_layout.addLayout(nav)
+
+        self.dashboard_stack = QStackedWidget()
+        self.dashboard_pages = {}
+        dashboard_layout.addWidget(self.dashboard_stack, 1)
+
+        def page_frame(name):
+            page = QFrame()
+            page.setObjectName("DashboardPage")
+            self.dashboard_pages[name] = page
+            self.dashboard_stack.addWidget(page)
+            return page
+
+        def card(title, subtitle, accent="#0a84ff"):
+            frame = QFrame()
+            frame.setStyleSheet("QFrame { background:#151517; border-radius:14px; }")
+            row = QHBoxLayout(frame)
+            row.setContentsMargins(14, 10, 14, 10)
+            glyph = QLabel("●")
+            glyph.setStyleSheet(f"color:{accent}; font-size:20px;")
+            text_box = QVBoxLayout()
+            heading = QLabel(title)
+            heading.setStyleSheet("font-size:14px; font-weight:700;")
+            detail = QLabel(subtitle)
+            detail.setStyleSheet("color:#92939a; font-size:11px;")
+            text_box.addWidget(heading)
+            text_box.addWidget(detail)
+            row.addWidget(glyph)
+            row.addLayout(text_box, 1)
+            return frame, heading, detail, row
+
+        home = page_frame("home")
+        home_grid = QGridLayout(home)
+        home_grid.setContentsMargins(0, 0, 0, 0)
+        home_grid.setSpacing(9)
+        wifi_card, self.dashboard_wifi_title, self.dashboard_wifi_detail, wifi_row = card(
+            "Wi-Fi", "Checking connection…")
+        wifi_open = QPushButton("Networks  ›")
+        wifi_open.clicked.connect(lambda: self._launch_uri("ms-settings:network-wifi"))
+        wifi_row.addWidget(wifi_open)
+        home_grid.addWidget(wifi_card, 0, 0)
+        bluetooth_card, _, self.dashboard_bluetooth_detail, bluetooth_row = card(
+            "Bluetooth", "Devices", "#0a84ff")
+        bluetooth_open = QPushButton("Devices  ›")
+        bluetooth_open.clicked.connect(lambda: self._launch_uri("ms-settings:bluetooth"))
+        bluetooth_row.addWidget(bluetooth_open)
+        home_grid.addWidget(bluetooth_card, 1, 0)
+
+        controls = QFrame()
+        controls.setStyleSheet("QFrame { background:#151517; border-radius:14px; }")
+        controls_layout = QGridLayout(controls)
+        controls_layout.setContentsMargins(14, 9, 14, 9)
+        controls_layout.addWidget(QLabel("🔊"), 0, 0)
+        self.dashboard_volume = QSlider(Qt.Orientation.Horizontal)
+        self.dashboard_volume.setRange(0, 100)
+        self.dashboard_volume.sliderReleased.connect(self._apply_dashboard_volume)
+        controls_layout.addWidget(self.dashboard_volume, 0, 1)
+        self.dashboard_volume_value = QLabel("--")
+        controls_layout.addWidget(self.dashboard_volume_value, 0, 2)
+        controls_layout.addWidget(QLabel("☀"), 1, 0)
+        self.dashboard_brightness = QSlider(Qt.Orientation.Horizontal)
+        self.dashboard_brightness.setRange(0, 100)
+        self.dashboard_brightness.sliderReleased.connect(self._apply_dashboard_brightness)
+        controls_layout.addWidget(self.dashboard_brightness, 1, 1)
+        self.dashboard_brightness_value = QLabel("--")
+        controls_layout.addWidget(self.dashboard_brightness_value, 1, 2)
+        home_grid.addWidget(controls, 0, 1, 2, 1)
+
+        stats = QFrame()
+        stats.setStyleSheet("QFrame { background:#151517; border-radius:14px; }")
+        stats_layout = QHBoxLayout(stats)
+        self.dashboard_cpu = QLabel("CPU  --%")
+        self.dashboard_ram = QLabel("RAM  --%")
+        self.dashboard_battery = QLabel("Battery  --%")
+        for label in (self.dashboard_cpu, self.dashboard_ram, self.dashboard_battery):
+            label.setStyleSheet("font-size:13px; font-weight:650;")
+            stats_layout.addWidget(label)
+        stats_layout.addStretch()
+        focus_button = QPushButton("☾  Focus")
+        focus_button.clicked.connect(lambda: self._show_dashboard_page("focus"))
+        stats_layout.addWidget(focus_button)
+        home_grid.addWidget(stats, 2, 0, 1, 2)
+        home_grid.setColumnStretch(0, 1)
+        home_grid.setColumnStretch(1, 1)
+
+        tasks = page_frame("tasks")
+        tasks_layout = QVBoxLayout(tasks)
+        tasks_layout.setContentsMargins(0, 0, 0, 0)
+        task_tabs = QHBoxLayout()
+        task_tabs.addWidget(QLabel("Tasks     Notes"))
+        task_tabs.addStretch()
+        self.dashboard_task_count = QLabel("0 to do")
+        task_tabs.addWidget(self.dashboard_task_count)
+        tasks_layout.addLayout(task_tabs)
+        task_entry_row = QHBoxLayout()
+        self.dashboard_task_entry = QLineEdit()
+        self.dashboard_task_entry.setPlaceholderText("New task")
+        self.dashboard_task_entry.returnPressed.connect(self._add_dashboard_task)
+        add_task = QPushButton("＋ Add")
+        add_task.clicked.connect(self._add_dashboard_task)
+        task_entry_row.addWidget(self.dashboard_task_entry, 1)
+        task_entry_row.addWidget(add_task)
+        tasks_layout.addLayout(task_entry_row)
+        self.dashboard_task_list = QVBoxLayout()
+        tasks_layout.addLayout(self.dashboard_task_list)
+        tasks_layout.addStretch()
+
+        clipboard = page_frame("clipboard")
+        clipboard_layout = QVBoxLayout(clipboard)
+        clipboard_layout.setContentsMargins(0, 0, 0, 0)
+        self.dashboard_clipboard_entry = QLineEdit()
+        self.dashboard_clipboard_entry.setPlaceholderText(
+            "Paste from clipboard history or a pinned snippet")
+        clipboard_layout.addWidget(self.dashboard_clipboard_entry)
+        clipboard_header = QHBoxLayout()
+        clipboard_header.addWidget(QLabel("Pinned"))
+        clipboard_header.addStretch()
+        pin_current = QPushButton("Pin current clipboard")
+        pin_current.clicked.connect(self._pin_current_clipboard)
+        clipboard_header.addWidget(pin_current)
+        clipboard_layout.addLayout(clipboard_header)
+        self.dashboard_clipboard_list = QVBoxLayout()
+        clipboard_layout.addLayout(self.dashboard_clipboard_list)
+        clipboard_layout.addStretch()
+
+        focus = page_frame("focus")
+        focus_layout = QVBoxLayout(focus)
+        focus_layout.setContentsMargins(0, 0, 0, 0)
+        focus_layout.addWidget(QLabel("Focus     Timer     Stopwatch"))
+        self.dashboard_focus_name = QLineEdit()
+        self.dashboard_focus_name.setPlaceholderText("What are you working on?")
+        focus_layout.addWidget(self.dashboard_focus_name)
+        focus_options = QHBoxLayout()
+        for minutes in (25, 50):
+            button = QPushButton(f"{minutes} min")
+            button.clicked.connect(lambda checked=False, value=minutes: self._set_focus_minutes(value))
+            focus_options.addWidget(button)
+        custom_focus = QPushButton("Custom")
+        custom_focus.clicked.connect(self.prompt_timer)
+        focus_options.addWidget(custom_focus)
+        focus_options.addStretch()
+        self.dashboard_start_focus = QPushButton("▶  Start focus")
+        self.dashboard_start_focus.setStyleSheet(
+            "background:#a77cff; color:white; border-radius:18px; font-weight:700;")
+        self.dashboard_start_focus.clicked.connect(self._start_focus_timer)
+        focus_options.addWidget(self.dashboard_start_focus)
+        focus_layout.addLayout(focus_options)
+        focus_layout.addStretch()
+
+        search = page_frame("search")
+        search_layout = QVBoxLayout(search)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        self.dashboard_search_entry = QLineEdit()
+        self.dashboard_search_entry.setPlaceholderText("Search, calculate, or ask Dexget")
+        self.dashboard_search_entry.returnPressed.connect(self._run_dashboard_search)
+        search_layout.addWidget(self.dashboard_search_entry)
+        self.dashboard_search_result = QLabel("Type a calculation or search query")
+        self.dashboard_search_result.setStyleSheet(
+            "background:#19191c; border-radius:12px; padding:14px; font-size:14px;")
+        search_layout.addWidget(self.dashboard_search_result)
+        search_layout.addStretch()
+
+        settings = page_frame("settings")
+        settings_layout = QGridLayout(settings)
         settings_layout.setContentsMargins(0, 0, 0, 0)
-        settings_layout.setSpacing(8)
-        settings_layout.addWidget(QLabel("Add widgets:"))
+        settings_actions = (
+            ("Wi-Fi settings", "ms-settings:network-wifi"),
+            ("Bluetooth settings", "ms-settings:bluetooth"),
+            ("Sound settings", "ms-settings:sound"),
+            ("Battery settings", "ms-settings:batterysaver"),
+            ("Notifications", "ms-settings:notifications"),
+            ("Dynamic Island preferences", "ms-settings:appsfeatures"),
+        )
+        for index, (text_value, uri) in enumerate(settings_actions):
+            button = QPushButton(text_value)
+            button.setFixedHeight(48)
+            button.setStyleSheet("background:#18181b; text-align:left; padding-left:16px;")
+            button.clicked.connect(lambda checked=False, target=uri: self._launch_uri(target))
+            settings_layout.addWidget(button, index // 2, index % 2)
+
+        self.dashboard_settings = settings
+        self.dashboard_added_widgets = {}
         self.dashboard_optional_buttons = {}
-        for key, label_text in (("battery", "Battery"), ("audio", "Audio")):
-            toggle = QPushButton(label_text)
-            toggle.setCheckable(True)
-            toggle.setChecked(bool(QSettings("Dexget", "DynamicIsland").value(
-                f"dashboard/{key}", False, type=bool)))
-            toggle.clicked.connect(
-                lambda checked, item=key: self._set_dashboard_preference(item, checked))
-            settings_layout.addWidget(toggle)
-            self.dashboard_optional_buttons[key] = toggle
-        settings_layout.addStretch()
-        dashboard_layout.addWidget(self.dashboard_settings)
-        self.dashboard_settings.hide()
+        self.dashboard_buttons = self.dashboard_nav_buttons
+        self._focus_minutes = 25
+        self._load_dashboard_tasks()
+        self._load_pinned_clipboard()
+        self._show_dashboard_page("home")
         self.dashboard_widget.hide()
 
         feature_actions = QHBoxLayout()
@@ -1442,7 +1617,7 @@ class JarvisWidget(QWidget):
             pass
 
     def _toggle_dashboard_settings(self):
-        self.dashboard_settings.setVisible(self.dashboard_settings.isHidden())
+        self._show_dashboard_page("settings")
         self._keep_feature_open()
 
     def _set_dashboard_preference(self, key, enabled):
@@ -1451,6 +1626,180 @@ class JarvisWidget(QWidget):
         if key in self.dashboard_added_widgets:
             self.dashboard_added_widgets[key].setVisible(bool(enabled))
         self._keep_feature_open()
+
+    def _show_dashboard_page(self, name):
+        page = self.dashboard_pages.get(name)
+        if page is None:
+            return
+        self.dashboard_stack.setCurrentWidget(page)
+        for key, button in self.dashboard_nav_buttons.items():
+            button.setChecked(key == name)
+        if name == "home":
+            self._refresh_dashboard_system_info()
+        elif name == "clipboard":
+            self.dashboard_clipboard_entry.setText(
+                QApplication.clipboard().text()[:300])
+        elif name == "search":
+            QTimer.singleShot(80, self.dashboard_search_entry.setFocus)
+        self._keep_feature_open()
+
+    def _refresh_dashboard_system_info(self):
+        try:
+            import psutil
+            self.dashboard_cpu.setText(f"CPU  {int(psutil.cpu_percent())}%")
+            self.dashboard_ram.setText(f"RAM  {int(psutil.virtual_memory().percent)}%")
+            battery = psutil.sensors_battery()
+            self.dashboard_battery.setText(
+                f"Battery  {int(battery.percent)}%" if battery else "Battery  --%")
+        except Exception:
+            pass
+        try:
+            from jarvis.capabilities import windows_system
+            wifi = windows_system.wifi_get_status().output
+            self.dashboard_wifi_detail.setText(
+                "Connected" if str(wifi).upper() == "ON" else str(wifi).title())
+            bluetooth = windows_system.bluetooth_get_status().output
+            self.dashboard_bluetooth_detail.setText(str(bluetooth).title())
+            volume = windows_system.volume_get()
+            volume_value = int(float(volume.output)) if volume.success else 0
+            brightness = int(windows_system.brightness_get())
+            self.dashboard_volume.setValue(volume_value)
+            self.dashboard_volume_value.setText(str(volume_value))
+            self.dashboard_brightness.setValue(brightness)
+            self.dashboard_brightness_value.setText(str(brightness))
+        except Exception:
+            pass
+
+    def _apply_dashboard_volume(self):
+        value = self.dashboard_volume.value()
+        self.dashboard_volume_value.setText(str(value))
+        try:
+            from jarvis.capabilities.windows_system import volume_set
+            volume_set(value)
+        except Exception:
+            pass
+
+    def _apply_dashboard_brightness(self):
+        value = self.dashboard_brightness.value()
+        self.dashboard_brightness_value.setText(str(value))
+        try:
+            from jarvis.capabilities.windows_system import brightness_set
+            brightness_set(value)
+        except Exception:
+            pass
+
+    def _load_dashboard_tasks(self):
+        tasks = QSettings("Dexget", "DynamicIsland").value(
+            "dashboard/tasks", [], type=list) or []
+        for text_value in tasks:
+            self._append_dashboard_task(str(text_value), persist=False)
+        self._update_dashboard_task_count()
+
+    def _dashboard_task_texts(self):
+        return [button.text()[2:] for button in self.dashboard_task_buttons]
+
+    def _append_dashboard_task(self, text_value, persist=True):
+        text_value = text_value.strip()
+        if not text_value:
+            return
+        button = QPushButton(f"○ {text_value}")
+        button.setStyleSheet("text-align:left; font-size:14px; padding:5px 8px;")
+        button.clicked.connect(lambda checked=False, item=button: self._complete_dashboard_task(item))
+        self.dashboard_task_list.addWidget(button)
+        if not hasattr(self, "dashboard_task_buttons"):
+            self.dashboard_task_buttons = []
+        self.dashboard_task_buttons.append(button)
+        if persist:
+            self._save_dashboard_tasks()
+        self._update_dashboard_task_count()
+
+    def _add_dashboard_task(self):
+        text_value = self.dashboard_task_entry.text()
+        self.dashboard_task_entry.clear()
+        self._append_dashboard_task(text_value)
+
+    def _complete_dashboard_task(self, button):
+        if button in self.dashboard_task_buttons:
+            self.dashboard_task_buttons.remove(button)
+        button.deleteLater()
+        self._save_dashboard_tasks()
+        self._update_dashboard_task_count()
+
+    def _save_dashboard_tasks(self):
+        QSettings("Dexget", "DynamicIsland").setValue(
+            "dashboard/tasks", self._dashboard_task_texts())
+
+    def _update_dashboard_task_count(self):
+        count = len(getattr(self, "dashboard_task_buttons", []))
+        self.dashboard_task_count.setText(f"{count} to do")
+
+    def _load_pinned_clipboard(self):
+        self.dashboard_clipboard_buttons = []
+        values = QSettings("Dexget", "DynamicIsland").value(
+            "dashboard/clipboard", [], type=list) or []
+        for text_value in values:
+            self._append_clipboard_pin(str(text_value), persist=False)
+
+    def _pin_current_clipboard(self):
+        text_value = QApplication.clipboard().text().strip()
+        if text_value:
+            self._append_clipboard_pin(text_value)
+
+    def _append_clipboard_pin(self, text_value, persist=True):
+        if any(button.property("clipText") == text_value
+               for button in self.dashboard_clipboard_buttons):
+            return
+        button = QPushButton(f"📌  {text_value[:82]}")
+        button.setProperty("clipText", text_value)
+        button.setStyleSheet("background:#1b1b1e; text-align:left; padding:9px 12px;")
+        button.clicked.connect(
+            lambda checked=False, value=text_value: QApplication.clipboard().setText(value))
+        self.dashboard_clipboard_list.addWidget(button)
+        self.dashboard_clipboard_buttons.append(button)
+        if persist:
+            QSettings("Dexget", "DynamicIsland").setValue(
+                "dashboard/clipboard",
+                [item.property("clipText") for item in self.dashboard_clipboard_buttons])
+
+    def _set_focus_minutes(self, minutes):
+        self._focus_minutes = int(minutes)
+        self.dashboard_start_focus.setText(f"▶  Start {minutes} min focus")
+
+    def _start_focus_timer(self):
+        self.start_timer(self._focus_minutes * 60)
+
+    def _run_dashboard_search(self):
+        query = self.dashboard_search_entry.text().strip()
+        if not query:
+            return
+        try:
+            import ast
+            import operator
+            operators = {
+                ast.Add: operator.add, ast.Sub: operator.sub,
+                ast.Mult: operator.mul, ast.Div: operator.truediv,
+                ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
+                ast.Pow: operator.pow, ast.USub: operator.neg,
+                ast.UAdd: operator.pos,
+            }
+            def evaluate(node):
+                if isinstance(node, ast.Expression):
+                    return evaluate(node.body)
+                if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                    return node.value
+                if isinstance(node, ast.BinOp) and type(node.op) in operators:
+                    return operators[type(node.op)](evaluate(node.left), evaluate(node.right))
+                if isinstance(node, ast.UnaryOp) and type(node.op) in operators:
+                    return operators[type(node.op)](evaluate(node.operand))
+                raise ValueError
+            result = evaluate(ast.parse(query, mode="eval"))
+            self.dashboard_search_result.setText(f"{result:g}\n{query}")
+        except Exception:
+            self.dashboard_search_result.setText(
+                f'Search the web for “{query}”  ›')
+            import urllib.parse
+            self.dashboard_search_result.mousePressEvent = lambda event, q=query: self._launch_uri(
+                "https://www.google.com/search?q=" + urllib.parse.quote_plus(q))
 
     def _compact_size(self):
         if self._notification_active:
@@ -1899,6 +2248,8 @@ class JarvisWidget(QWidget):
         self.dashboard_widget.setVisible(dashboard_mode)
         if media_mode:
             self._update_media_feature_panel()
+        elif dashboard_mode:
+            self._refresh_dashboard_system_info()
 
     @staticmethod
     def _format_media_time(seconds):
@@ -1967,7 +2318,8 @@ class JarvisWidget(QWidget):
 
     def _show_feature_content(self):
         if self.is_expanded and self._expanded_view == "feature":
-            self.title_bar.setVisible(not bool(self._media))
+            self.title_bar.setVisible(
+                not bool(self._media) and not self._is_default_activity())
             self.feature_panel.show()
 
     def expand_feature(self):

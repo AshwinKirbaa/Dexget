@@ -642,6 +642,9 @@ def test_default_island_uses_status_bar_and_customizable_dashboard():
         build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
         widget = JarvisWidget()
     try:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget._media = {}
         widget._sync_compact_surface()
         widget._update_default_status()
         assert not widget.default_status_widget.isHidden()
@@ -657,12 +660,17 @@ def test_default_island_uses_status_bar_and_customizable_dashboard():
         assert not widget.dashboard_widget.isHidden()
         assert widget.feature_title.isHidden()
         assert widget._feature_expanded_size() == widget.DASHBOARD_EXPANDED_SIZE
-
-        widget._toggle_dashboard_settings()
-        assert not widget.dashboard_settings.isHidden()
-        widget._set_dashboard_preference("battery", True)
-        assert not widget.dashboard_added_widgets["battery"].isHidden()
-        widget._set_dashboard_preference("battery", False)
+        assert widget.dashboard_stack.currentWidget() is widget.dashboard_pages["home"]
+        widget._show_dashboard_page("tasks")
+        assert widget.dashboard_stack.currentWidget() is widget.dashboard_pages["tasks"]
+        widget.dashboard_task_entry.setText("Test dashboard task")
+        widget._add_dashboard_task()
+        assert widget.dashboard_task_count.text().endswith("to do")
+        widget._complete_dashboard_task(widget.dashboard_task_buttons[-1])
+        widget._show_dashboard_page("search")
+        widget.dashboard_search_entry.setText("15% of 80".replace("% of", "/100*"))
+        widget._run_dashboard_search()
+        assert widget.dashboard_search_result.text().startswith("12")
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()
