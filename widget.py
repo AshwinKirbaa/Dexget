@@ -468,6 +468,51 @@ class MessageWidget(QWidget):
             
         self.setLayout(layout)
 
+
+class DashboardSystemWorker(QThread):
+    """Fetch slower Windows control-center values away from the UI thread."""
+    info_ready = pyqtSignal(dict)
+
+    def run(self):
+        data = {}
+        try:
+            import psutil
+            data["cpu"] = int(psutil.cpu_percent())
+            data["ram"] = int(psutil.virtual_memory().percent)
+            battery = psutil.sensors_battery()
+            data["battery"] = int(battery.percent) if battery else None
+        except Exception:
+            pass
+        com_initialized = False
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            com_initialized = True
+        except Exception:
+            pass
+        try:
+            from jarvis.capabilities import windows_system
+            wifi = windows_system.wifi_get_status()
+            data["wifi"] = wifi.output if wifi.success else "Unavailable"
+            bluetooth = windows_system.bluetooth_get_status()
+            data["bluetooth"] = (
+                bluetooth.output if bluetooth.success else "Unavailable")
+            volume = windows_system.volume_get()
+            if volume.success:
+                data["volume"] = int(float(volume.output))
+            brightness = windows_system.brightness_get()
+            if brightness is not None:
+                data["brightness"] = int(brightness)
+        except Exception:
+            pass
+        finally:
+            if com_initialized:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+        self.info_ready.emit(data)
+
 class JarvisWidget(QWidget):
     HIDDEN_SIZE = QSize(120, 4)
     MINIMIZE_SIZE = QSize(120, 32)
@@ -1644,31 +1689,39 @@ class JarvisWidget(QWidget):
         self._keep_feature_open()
 
     def _refresh_dashboard_system_info(self):
-        try:
-            import psutil
-            self.dashboard_cpu.setText(f"CPU  {int(psutil.cpu_percent())}%")
-            self.dashboard_ram.setText(f"RAM  {int(psutil.virtual_memory().percent)}%")
-            battery = psutil.sensors_battery()
+        # Never wait for PowerShell, WinRT, WMI, or audio COM calls on the Qt
+        # event loop. The panel opens using its last values and is refreshed
+        # asynchronously as soon as Windows answers.
+        worker = getattr(self, "_dashboard_info_worker", None)
+        if worker is None:
+            worker = DashboardSystemWorker(self)
+            worker.info_ready.connect(self._apply_dashboard_system_info)
+            self._dashboard_info_worker = worker
+        if not worker.isRunning():
+            worker.start()
+
+    def _apply_dashboard_system_info(self, data):
+        if "cpu" in data:
+            self.dashboard_cpu.setText(f"CPU  {data['cpu']}%")
+        if "ram" in data:
+            self.dashboard_ram.setText(f"RAM  {data['ram']}%")
+        if "battery" in data:
+            battery = data["battery"]
             self.dashboard_battery.setText(
-                f"Battery  {int(battery.percent)}%" if battery else "Battery  --%")
-        except Exception:
-            pass
-        try:
-            from jarvis.capabilities import windows_system
-            wifi = windows_system.wifi_get_status().output
+                f"Battery  {battery}%" if battery is not None else "Battery  --%")
+        if "wifi" in data:
+            wifi = str(data["wifi"])
             self.dashboard_wifi_detail.setText(
-                "Connected" if str(wifi).upper() == "ON" else str(wifi).title())
-            bluetooth = windows_system.bluetooth_get_status().output
-            self.dashboard_bluetooth_detail.setText(str(bluetooth).title())
-            volume = windows_system.volume_get()
-            volume_value = int(float(volume.output)) if volume.success else 0
-            brightness = int(windows_system.brightness_get())
-            self.dashboard_volume.setValue(volume_value)
-            self.dashboard_volume_value.setText(str(volume_value))
-            self.dashboard_brightness.setValue(brightness)
-            self.dashboard_brightness_value.setText(str(brightness))
-        except Exception:
-            pass
+                "Connected" if wifi.upper() == "ON" else wifi.title())
+        if "bluetooth" in data:
+            self.dashboard_bluetooth_detail.setText(
+                str(data["bluetooth"]).title())
+        if "volume" in data:
+            self.dashboard_volume.setValue(data["volume"])
+            self.dashboard_volume_value.setText(str(data["volume"]))
+        if "brightness" in data:
+            self.dashboard_brightness.setValue(data["brightness"])
+            self.dashboard_brightness_value.setText(str(data["brightness"]))
 
     def _apply_dashboard_volume(self):
         value = self.dashboard_volume.value()
