@@ -719,6 +719,38 @@ def test_timer_activity_counts_down_and_restores_default_surface():
         app.processEvents()
 
 
+def test_timer_started_from_default_page_owns_compact_surface_over_media():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.update_media({
+            "title": "SEM DEMORA (Slowed)", "artist": "DJ Samir",
+            "app": "YouTube Music", "playing": True,
+            "position": 53, "duration": 163,
+        })
+        widget.show_default_page()
+        assert widget._default_page_override
+
+        widget.start_timer(215)
+        app.processEvents()
+        assert not widget._default_page_override
+        assert widget._timer_active
+        assert widget._compact_size() == widget.TIMER_SIZE
+        assert not widget.timer_status_widget.isHidden()
+        assert widget.default_status_widget.isHidden()
+        assert widget._media.get("title") == "SEM DEMORA (Slowed)"
+    finally:
+        widget.cancel_timer()
+        widget.worker.shutdown()
+        widget.media_worker.shutdown()
+        widget.worker.wait(2000)
+        widget.media_worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_interrupted_expand_does_not_reveal_stale_content():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:

@@ -1671,6 +1671,10 @@ class JarvisWidget(QWidget):
 
     def start_timer(self, seconds):
         seconds = max(1.0, float(seconds))
+        # A timer started from the default page becomes the active service;
+        # do not leave the page override in place or it will inherit the
+        # background media player's geometry and surface routing.
+        self._default_page_override = False
         self._timer_generation += 1
         self._timer_active = True
         self._timer_running = True
