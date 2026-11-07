@@ -672,6 +672,45 @@ def test_default_island_uses_status_bar_and_customizable_dashboard():
         app.processEvents()
 
 
+def test_timer_activity_counts_down_and_restores_default_surface():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.start_timer(215)
+        app.processEvents()
+        assert widget._timer_active
+        assert widget._timer_running
+        assert widget._compact_size() == widget.TIMER_SIZE
+        assert not widget.timer_status_widget.isHidden()
+        assert widget.default_status_widget.isHidden()
+        assert widget.timer_remaining_label.text() == "3:35"
+        assert widget.close_btn.isHidden()
+
+        widget.toggle_timer()
+        assert not widget._timer_running
+        assert widget.timer_pause_btn.text() == "▶"
+        paused = widget._timer_remaining
+        widget.toggle_timer()
+        assert widget._timer_running
+        assert widget.timer_pause_btn.text() == "Ⅱ"
+        assert widget._timer_remaining == paused
+
+        widget.cancel_timer()
+        app.processEvents()
+        assert not widget._timer_active
+        assert widget.timer_status_widget.isHidden()
+        assert not widget.default_status_widget.isHidden()
+    finally:
+        widget.worker.shutdown()
+        widget.media_worker.shutdown()
+        widget.worker.wait(2000)
+        widget.media_worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_interrupted_expand_does_not_reveal_stale_content():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:

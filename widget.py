@@ -7,7 +7,7 @@ import os
 import glob
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
-                             QFrame, QSizePolicy, QGraphicsDropShadowEffect,
+                        QFrame, QSizePolicy, QGraphicsDropShadowEffect, QInputDialog,
                              QGraphicsOpacityEffect, QSlider, QGridLayout)
 from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
@@ -477,6 +477,7 @@ class JarvisWidget(QWidget):
     HEADSET_SIZE = QSize(350, 56)
     NOTIFICATION_SIZE = QSize(370, 64)
     CALL_SIZE = QSize(360, 52)
+    TIMER_SIZE = QSize(370, 58)
     MEDIA_MIN_WIDTH = 400
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
@@ -525,6 +526,11 @@ class JarvisWidget(QWidget):
         self._call_context = None
         self._call_muted = False
         self._call_miss_count = 0
+        self._timer_active = False
+        self._timer_running = False
+        self._timer_remaining = 0.0
+        self._timer_deadline = None
+        self._timer_generation = 0
         self._discord_log_path = None
         self._discord_log_offset = 0
         self._discord_rtc_active = False
@@ -582,6 +588,9 @@ class JarvisWidget(QWidget):
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(1000)
         self._status_timer.timeout.connect(self._update_default_status)
+        self._countdown_timer = QTimer(self)
+        self._countdown_timer.setInterval(200)
+        self._countdown_timer.timeout.connect(self._tick_countdown)
         self.initUI()
         self._update_default_status()
         self._sync_compact_surface()
@@ -820,6 +829,44 @@ class JarvisWidget(QWidget):
         default_status_layout.addWidget(self.default_clock_label, 1)
         default_status_layout.addWidget(self.default_battery_label)
         self.default_status_widget.hide()
+
+        self.timer_status_widget = QWidget()
+        timer_status_layout = QHBoxLayout(self.timer_status_widget)
+        timer_status_layout.setContentsMargins(0, 0, 0, 0)
+        timer_status_layout.setSpacing(10)
+        self.timer_pause_btn = QPushButton("Ⅱ")
+        self.timer_pause_btn.setFixedSize(40, 40)
+        self.timer_pause_btn.setToolTip("Pause timer")
+        self.timer_pause_btn.setStyleSheet("""
+            QPushButton { background: #b95a0a; color: white; border: none;
+                          border-radius: 20px; font-size: 17px; font-weight: 700; }
+            QPushButton:hover { background: #d66b10; }
+            QPushButton:pressed { background: #954706; }
+        """)
+        self.timer_cancel_btn = QPushButton("×")
+        self.timer_cancel_btn.setFixedSize(40, 40)
+        self.timer_cancel_btn.setToolTip("Cancel timer")
+        self.timer_cancel_btn.setStyleSheet("""
+            QPushButton { background: #62646a; color: white; border: none;
+                          border-radius: 20px; font-size: 27px; font-weight: 300; }
+            QPushButton:hover { background: #74767d; }
+            QPushButton:pressed { background: #4d4f54; }
+        """)
+        self.timer_caption_label = QLabel("Timer")
+        self.timer_caption_label.setFont(QFont("Segoe UI", 9))
+        self.timer_caption_label.setStyleSheet("color: #ff9f0a;")
+        self.timer_remaining_label = QLabel("0:00")
+        self.timer_remaining_label.setFont(QFont("Segoe UI", 18, QFont.Weight.DemiBold))
+        self.timer_remaining_label.setStyleSheet("color: #ff8a00;")
+        self.timer_remaining_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        timer_status_layout.addWidget(self.timer_pause_btn)
+        timer_status_layout.addWidget(self.timer_cancel_btn)
+        timer_status_layout.addStretch(1)
+        timer_status_layout.addWidget(self.timer_caption_label)
+        timer_status_layout.addWidget(self.timer_remaining_label)
+        self.timer_pause_btn.clicked.connect(self.toggle_timer)
+        self.timer_cancel_btn.clicked.connect(self.cancel_timer)
+        self.timer_status_widget.hide()
         
         title_layout.addWidget(self.status_dot)
         title_layout.addWidget(self.album_art)
@@ -827,6 +874,7 @@ class JarvisWidget(QWidget):
         # collapses this layout to zero because its labels use Ignored sizing.
         title_layout.addWidget(self.identity_widget, 1)
         title_layout.addWidget(self.default_status_widget, 1)
+        title_layout.addWidget(self.timer_status_widget, 1)
         title_layout.addWidget(self.charging_label)
         title_layout.addWidget(self.low_power_label)
         title_layout.addWidget(self.notification_identity)
@@ -970,7 +1018,7 @@ class JarvisWidget(QWidget):
         dashboard_grid.setVerticalSpacing(8)
         self.dashboard_buttons = {}
         actions = (
-            ("Timer", "Timer", lambda: self._launch_uri("ms-clock:timer")),
+            ("Timer", "Timer", self.prompt_timer),
             ("Notes", "Notes", lambda: self._launch_program("notepad.exe")),
             ("Screen", "Screen Assist", self.start_screen_assist),
             ("Settings", "Customize", self._toggle_dashboard_settings),
@@ -1234,19 +1282,34 @@ class JarvisWidget(QWidget):
     def _is_default_activity(self):
         return not any((self._media, self._notification_active,
                         self._headset_active, self._low_power_active,
-                        self._charging_active, self._call_context))
+                        self._charging_active, self._call_context,
+                        self._timer_active))
 
     def _sync_compact_surface(self):
         default = self._is_default_activity()
+        timer_visible = bool(self._timer_active and not any((
+            self._notification_active, self._headset_active,
+            self._low_power_active, self._charging_active)))
         self.default_status_widget.setVisible(default)
+        self.timer_status_widget.setVisible(timer_visible)
+        if timer_visible:
+            self.status_dot.hide()
+            self.identity_widget.hide()
+            self.screen_assist_btn.hide()
+            self.close_btn.hide()
+            self.call_mute_btn.hide()
+            self._set_media_controls_visible(False)
+            return
         if default:
             self.status_dot.hide()
             self.identity_widget.hide()
             self.screen_assist_btn.hide()
+            self.close_btn.show()
         elif self._media or self._call_context:
             self.default_status_widget.hide()
             self.status_dot.show()
             self.identity_widget.show()
+            self.close_btn.show()
 
     def _update_default_status(self):
         if not hasattr(self, "default_clock_label"):
@@ -1272,6 +1335,96 @@ class JarvisWidget(QWidget):
             percent = None
         self.default_battery_label.setText(
             f"Battery {percent}%" if percent is not None else "Battery --%")
+
+    @staticmethod
+    def _format_countdown(seconds):
+        total = max(0, int(seconds + 0.999))
+        hours, remainder = divmod(total, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return (f"{hours}:{minutes:02d}:{seconds:02d}" if hours
+                else f"{minutes}:{seconds:02d}")
+
+    def prompt_timer(self):
+        minutes, accepted = QInputDialog.getInt(
+            self, "Start timer", "Timer length in minutes:", 5, 1, 1440, 1)
+        if accepted:
+            self.start_timer(minutes * 60)
+
+    def start_timer(self, seconds):
+        seconds = max(1.0, float(seconds))
+        self._timer_generation += 1
+        self._timer_active = True
+        self._timer_running = True
+        self._timer_remaining = seconds
+        self._timer_deadline = time.monotonic() + seconds
+        self.timer_caption_label.setText("Timer")
+        self.timer_pause_btn.setText("Ⅱ")
+        self.timer_pause_btn.setToolTip("Pause timer")
+        self.timer_remaining_label.setText(self._format_countdown(seconds))
+        self._countdown_timer.start()
+        self._collapse_timer.stop()
+        self._feature_collapse_timer.stop()
+        self.is_expanded = False
+        self._present_compact(self.TIMER_SIZE)
+
+    def _tick_countdown(self):
+        if not self._timer_active or not self._timer_running:
+            return
+        self._timer_remaining = max(
+            0.0, (self._timer_deadline or time.monotonic()) - time.monotonic())
+        self.timer_remaining_label.setText(
+            self._format_countdown(self._timer_remaining))
+        if self._timer_remaining <= 0:
+            self._timer_running = False
+            self._timer_deadline = None
+            self._countdown_timer.stop()
+            self.timer_caption_label.setText("Timer done")
+            self.timer_pause_btn.setText("▶")
+            self.timer_pause_btn.setEnabled(False)
+            QApplication.beep()
+            generation = self._timer_generation
+            QTimer.singleShot(
+                8000,
+                lambda: self.cancel_timer()
+                if generation == self._timer_generation else None)
+
+    def toggle_timer(self):
+        if not self._timer_active or self._timer_remaining <= 0:
+            return
+        if self._timer_running:
+            self._timer_remaining = max(
+                0.0, (self._timer_deadline or time.monotonic()) - time.monotonic())
+            self._timer_running = False
+            self._timer_deadline = None
+            self._countdown_timer.stop()
+            self.timer_pause_btn.setText("▶")
+            self.timer_pause_btn.setToolTip("Resume timer")
+        else:
+            self._timer_running = True
+            self._timer_deadline = time.monotonic() + self._timer_remaining
+            self._countdown_timer.start()
+            self.timer_pause_btn.setText("Ⅱ")
+            self.timer_pause_btn.setToolTip("Pause timer")
+        self.timer_remaining_label.setText(
+            self._format_countdown(self._timer_remaining))
+
+    def cancel_timer(self):
+        if not self._timer_active:
+            return
+        self._timer_generation += 1
+        self._countdown_timer.stop()
+        self._timer_active = False
+        self._timer_running = False
+        self._timer_remaining = 0.0
+        self._timer_deadline = None
+        self.timer_pause_btn.setEnabled(True)
+        self.timer_status_widget.hide()
+        self._sync_compact_surface()
+        if self._media and self._media.get("playing"):
+            self.activate_media_island()
+        else:
+            self._present_compact(self._compact_size())
+            self._collapse_timer.start(1800)
 
     @staticmethod
     def _launch_uri(uri):
@@ -1308,6 +1461,8 @@ class JarvisWidget(QWidget):
             return self.LOW_POWER_SIZE
         if self._charging_active:
             return self.CHARGING_SIZE
+        if self._timer_active:
+            return self.TIMER_SIZE
         if self._call_context and not self._media:
             return self.CALL_SIZE
         if not self._media:
@@ -1559,7 +1714,7 @@ class JarvisWidget(QWidget):
             return
         if self.input_field.hasFocus() and self.input_field.text():
             return
-        if self._assistant_state == "Idle" and not self._media:
+        if self._assistant_state == "Idle" and not self._media and not self._timer_active:
             self.hide_idle_island()
             return
         self.is_expanded = False
@@ -1573,6 +1728,7 @@ class JarvisWidget(QWidget):
     def hide_idle_island(self):
         if (self.worker.busy.is_set()
                 or self._call_context
+                or self._timer_active
                 or (self._media and self._media.get("playing") and not self._media_manually_hidden)
                 or not self.confirmation_panel.isHidden()):
             return
@@ -1654,6 +1810,7 @@ class JarvisWidget(QWidget):
 
     def _check_hot_zone(self):
         if (self._is_hiding or self.is_expanded or self.worker.busy.is_set()
+                or self._timer_active
                 or (self._media and self._media.get("playing")
                     and not self._media_manually_hidden)):
             return
@@ -1705,6 +1862,11 @@ class JarvisWidget(QWidget):
             return ("BATTERY", "Charging", self.charging_percent.text(),
                     "Battery settings", lambda: self.worker.submit_text(
                         "open battery settings", display_text="Open battery settings"))
+        if self._timer_active:
+            return ("TIMER", self.timer_remaining_label.text(),
+                    "Running" if self._timer_running else "Paused",
+                    "Pause" if self._timer_running else "Resume",
+                    self.toggle_timer)
         if self._call_context:
             state = "Microphone muted" if self._call_muted else "Microphone active"
             return ("LIVE CALL", f"{self._call_context} Call", state,
