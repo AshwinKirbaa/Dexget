@@ -636,7 +636,7 @@ def test_playback_start_does_not_duplicate_compact_header_over_player():
         app.processEvents()
 
 
-def test_default_island_stays_compact_without_control_center():
+def test_default_island_expands_without_removed_system_controls():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:
         build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
@@ -654,10 +654,15 @@ def test_default_island_stays_compact_without_control_center():
         assert "AM" in widget.default_clock_label.text() or "PM" in widget.default_clock_label.text()
 
         widget.toggle_island()
+        widget._animation.setCurrentTime(widget._animation.duration())
+        widget._show_feature_content()
         app.processEvents()
-        assert not widget.is_expanded
-        assert widget.dashboard_widget.isHidden()
-        assert not hasattr(widget, "_dashboard_info_worker")
+        assert widget.is_expanded
+        assert not widget.dashboard_widget.isHidden()
+        assert widget.dashboard_wifi_card.isHidden()
+        assert widget.dashboard_bluetooth_card.isHidden()
+        assert widget.dashboard_controls_card.isHidden()
+        assert widget.dashboard_stack.currentWidget() is widget.dashboard_pages["home"]
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()

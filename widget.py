@@ -483,34 +483,6 @@ class DashboardSystemWorker(QThread):
             data["battery"] = int(battery.percent) if battery else None
         except Exception:
             pass
-        com_initialized = False
-        try:
-            import pythoncom
-            pythoncom.CoInitialize()
-            com_initialized = True
-        except Exception:
-            pass
-        try:
-            from jarvis.capabilities import windows_system
-            wifi = windows_system.wifi_get_status()
-            data["wifi"] = wifi.output if wifi.success else "Unavailable"
-            bluetooth = windows_system.bluetooth_get_status()
-            data["bluetooth"] = (
-                bluetooth.output if bluetooth.success else "Unavailable")
-            volume = windows_system.volume_get()
-            if volume.success:
-                data["volume"] = int(float(volume.output))
-            brightness = windows_system.brightness_get()
-            if brightness is not None:
-                data["brightness"] = int(brightness)
-        except Exception:
-            pass
-        finally:
-            if com_initialized:
-                try:
-                    pythoncom.CoUninitialize()
-                except Exception:
-                    pass
         self.info_ready.emit(data)
 
 class JarvisWidget(QWidget):
@@ -1140,18 +1112,21 @@ class JarvisWidget(QWidget):
         home_grid.setSpacing(9)
         wifi_card, self.dashboard_wifi_title, self.dashboard_wifi_detail, wifi_row = card(
             "Wi-Fi", "Checking connection…")
+        self.dashboard_wifi_card = wifi_card
         wifi_open = QPushButton("Networks  ›")
         wifi_open.clicked.connect(lambda: self._launch_uri("ms-settings:network-wifi"))
         wifi_row.addWidget(wifi_open)
         home_grid.addWidget(wifi_card, 0, 0)
         bluetooth_card, _, self.dashboard_bluetooth_detail, bluetooth_row = card(
             "Bluetooth", "Devices", "#0a84ff")
+        self.dashboard_bluetooth_card = bluetooth_card
         bluetooth_open = QPushButton("Devices  ›")
         bluetooth_open.clicked.connect(lambda: self._launch_uri("ms-settings:bluetooth"))
         bluetooth_row.addWidget(bluetooth_open)
         home_grid.addWidget(bluetooth_card, 1, 0)
 
         controls = QFrame()
+        self.dashboard_controls_card = controls
         controls.setStyleSheet("QFrame { background:#151517; border-radius:14px; }")
         controls_layout = QGridLayout(controls)
         controls_layout.setContentsMargins(14, 9, 14, 9)
@@ -1184,7 +1159,10 @@ class JarvisWidget(QWidget):
         focus_button = QPushButton("☾  Focus")
         focus_button.clicked.connect(lambda: self._show_dashboard_page("focus"))
         stats_layout.addWidget(focus_button)
-        home_grid.addWidget(stats, 2, 0, 1, 2)
+        home_grid.addWidget(stats, 0, 0, 1, 2)
+        self.dashboard_wifi_card.hide()
+        self.dashboard_bluetooth_card.hide()
+        self.dashboard_controls_card.hide()
         home_grid.setColumnStretch(0, 1)
         home_grid.setColumnStretch(1, 1)
 
@@ -1269,9 +1247,6 @@ class JarvisWidget(QWidget):
         settings_layout = QGridLayout(settings)
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_actions = (
-            ("Wi-Fi settings", "ms-settings:network-wifi"),
-            ("Bluetooth settings", "ms-settings:bluetooth"),
-            ("Sound settings", "ms-settings:sound"),
             ("Battery settings", "ms-settings:batterysaver"),
             ("Notifications", "ms-settings:notifications"),
             ("Dynamic Island preferences", "ms-settings:appsfeatures"),
@@ -1290,9 +1265,8 @@ class JarvisWidget(QWidget):
         self._focus_minutes = 25
         self._load_dashboard_tasks()
         self._load_pinned_clipboard()
-        # The idle control-center surface is intentionally not activated.
-        # Default mode remains a compact status pill; contextual activities
-        # (media, calls, timers, notifications) still own expansion.
+        # Start on the lightweight summary page; system controls that the user
+        # removed are neither shown nor queried.
         self.dashboard_stack.setCurrentWidget(self.dashboard_pages["home"])
         self.dashboard_nav_buttons["home"].setChecked(True)
         self.dashboard_widget.hide()
@@ -2248,8 +2222,6 @@ class JarvisWidget(QWidget):
     def toggle_island(self):
         if self.is_expanded:
             self.collapse_island()
-        elif self._is_default_activity():
-            return
         else:
             self.expand_feature()
 
@@ -2299,7 +2271,7 @@ class JarvisWidget(QWidget):
         # is intentionally available only from the default compact island.
         self.feature_ai_btn.hide()
         media_mode = bool(self._media)
-        dashboard_mode = False
+        dashboard_mode = self._is_default_activity()
         for widget in (self.feature_eyebrow, self.feature_title,
                        self.feature_detail, self.feature_primary_btn):
             widget.setVisible(not media_mode and not dashboard_mode)
@@ -2307,6 +2279,8 @@ class JarvisWidget(QWidget):
         self.dashboard_widget.setVisible(dashboard_mode)
         if media_mode:
             self._update_media_feature_panel()
+        elif dashboard_mode:
+            self._refresh_dashboard_system_info()
 
     @staticmethod
     def _format_media_time(seconds):
