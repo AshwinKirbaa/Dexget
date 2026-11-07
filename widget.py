@@ -673,6 +673,7 @@ class JarvisWidget(QWidget):
         self._swipe_start_pos = None
         self._global_swipe_start = None
         self._last_page_switch = 0.0
+        self._page_switch_animation = None
         QApplication.instance().installEventFilter(self)
         self.screen_assist_worker = None
         self._screen_context = None
@@ -3454,10 +3455,9 @@ class JarvisWidget(QWidget):
         current = self._activity_page if self._activity_page in pages else pages[0]
         index = (pages.index(current) + direction) % len(pages)
         target = pages[index]
-        # Page changes are a state switch, not a resize animation. Avoid
-        # painting an intermediate geometry that makes navigation flicker.
-        if self._animation:
-            self._animation.stop()
+        self._animate_activity_page_switch(target, direction)
+
+    def _apply_activity_page(self, target):
         if target == "default":
             self.show_default_page(animate=False)
         elif target == "timer":
@@ -3469,6 +3469,54 @@ class JarvisWidget(QWidget):
             self._set_activity_geometry(self.TIMER_SIZE)
         else:
             self.show_activity_page(animate=False)
+
+    def _animate_activity_page_switch(self, target, direction):
+        """Slide between independent activity pages like Windows desktops."""
+        if target == self._activity_page:
+            return
+        if self._page_switch_animation:
+            self._page_switch_animation.stop()
+        if self._animation:
+            self._animation.stop()
+
+        animation = QVariantAnimation(self)
+        self._page_switch_animation = animation
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setDuration(300)
+        animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        start_geometry = QRect(self.geometry())
+        offset = min(90, max(48, start_geometry.width() // 5))
+        swapped = False
+
+        def update(progress):
+            nonlocal swapped
+            progress = float(progress)
+            if progress < 0.5:
+                phase = progress / 0.5
+                self.move(start_geometry.x() - direction * round(offset * phase),
+                          start_geometry.y())
+                self.setWindowOpacity(max(0.0, 1.0 - phase))
+                return
+            if not swapped:
+                swapped = True
+                self.setWindowOpacity(0.0)
+                self._apply_activity_page(target)
+            phase = (progress - 0.5) / 0.5
+            center = self._target_geometry(self.size())
+            self.move(center.x() + direction * round(offset * (1.0 - phase)),
+                      center.y())
+            self.setWindowOpacity(min(1.0, phase))
+
+        def finish():
+            self.setWindowOpacity(1.0)
+            self._place_top_center()
+            self.raise_()
+            self._page_switch_animation = None
+
+        animation.valueChanged.connect(update)
+        animation.finished.connect(finish)
+        animation.start()
 
     def _set_activity_geometry(self, size):
         """Commit a page switch in one paint, avoiding intermediate flicker."""

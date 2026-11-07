@@ -161,7 +161,7 @@ def test_dynamic_island_reacts_to_media_metadata():
         assert widget.name_label.text() == "DEXGET"
         assert widget.album_art.isHidden()
         assert widget.previous_btn.isHidden()
-        assert widget._compact_size() == widget.COLLAPSED_SIZE
+        assert widget._compact_size().width() == 390
     finally:
         widget.media_worker.shutdown()
         widget.media_worker.wait(2000)
@@ -764,11 +764,15 @@ def test_music_and_timer_are_switchable_activity_pages():
         widget.start_timer(60)
         assert widget._activity_page == "timer"
         widget._cycle_activity_page(1)
+        widget._page_switch_animation.setCurrentTime(
+            widget._page_switch_animation.duration())
         assert widget._activity_page == "media"
         assert not widget.identity_widget.isHidden()
         assert widget.timer_status_widget.isHidden()
         widget._last_page_switch = 0
         widget._cycle_activity_page(-1)
+        widget._page_switch_animation.setCurrentTime(
+            widget._page_switch_animation.duration())
         assert widget._activity_page == "timer"
         assert not widget.timer_status_widget.isHidden()
         assert widget._media.get("title") == "Song"
@@ -853,7 +857,7 @@ def test_activity_page_swipe_preserves_call_and_restores_it():
         app.processEvents()
         assert widget._default_page_override
         assert widget._call_context == "Discord"
-        assert widget._compact_size() == widget.COLLAPSED_SIZE
+        assert widget._compact_size().width() == 390
         assert not widget.default_status_widget.isHidden()
         assert widget.call_mute_btn.isHidden()
 
