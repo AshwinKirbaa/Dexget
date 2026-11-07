@@ -1635,6 +1635,10 @@ class JarvisWidget(QWidget):
             self.default_status_widget.hide()
             self.status_dot.show()
             self.identity_widget.show()
+            if self._activity_page == "media" and self._media:
+                self.name_label.setText(self._media.get("title") or "Now playing")
+                self.status_label.setText(
+                    self._media.get("artist") or self._media.get("app", "Media"))
             self.close_btn.hide()
 
     def _update_default_status(self):
@@ -3407,7 +3411,10 @@ class JarvisWidget(QWidget):
         self._hide_activity_page_widgets()
         self._sync_compact_surface()
         self._update_default_status()
-        self._animate_to(self.COLLAPSED_SIZE, self.COMPACT_TRANSITION_MS if animate else 1)
+        if animate:
+            self._animate_to(self.COLLAPSED_SIZE, self.COMPACT_TRANSITION_MS)
+        else:
+            self._set_activity_geometry(self.COLLAPSED_SIZE)
 
     def show_activity_page(self, animate=True):
         """Show the music/call activity page without stopping other activities."""
@@ -3420,7 +3427,11 @@ class JarvisWidget(QWidget):
         self.title_bar.show()
         self._sync_compact_surface()
         self._restore_activity_page_widgets()
-        self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS if animate else 1)
+        size = self._compact_size()
+        if animate:
+            self._animate_to(size, self.COMPACT_TRANSITION_MS)
+        else:
+            self._set_activity_geometry(size)
         if self._call_context and not self._media:
             self._call_hide_timer.start(4500)
 
@@ -3445,12 +3456,20 @@ class JarvisWidget(QWidget):
             self.is_expanded = False
             self.feature_panel.hide()
             self._sync_compact_surface()
-            self.container.setFixedSize(self.TIMER_SIZE)
-            self.setGeometry(self._target_geometry(self.TIMER_SIZE))
-            self._apply_rounded_window_mask(self.TIMER_SIZE)
-            self.show()
+            self._set_activity_geometry(self.TIMER_SIZE)
         else:
             self.show_activity_page(animate=False)
+
+    def _set_activity_geometry(self, size):
+        """Commit a page switch in one paint, avoiding intermediate flicker."""
+        if self._animation:
+            self._animation.stop()
+        self._transition_generation += 1
+        self.is_expanded = False
+        self.container.setFixedSize(size)
+        self.setGeometry(self._target_geometry(size))
+        self._apply_rounded_window_mask(size)
+        self.show()
 
     def _begin_page_swipe(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
