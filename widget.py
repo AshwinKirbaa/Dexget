@@ -3483,7 +3483,7 @@ class JarvisWidget(QWidget):
         self._page_switch_animation = animation
         animation.setStartValue(0.0)
         animation.setEndValue(1.0)
-        animation.setDuration(180)
+        animation.setDuration(140)
         animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
         swapped = False
 
@@ -3492,17 +3492,17 @@ class JarvisWidget(QWidget):
             progress = float(progress)
             if progress < 0.5:
                 phase = progress / 0.5
-                self.title_bar_opacity.setOpacity(max(0.0, 1.0 - phase))
+                self.setWindowOpacity(max(0.0, 1.0 - phase))
                 return
             if not swapped:
                 swapped = True
-                self.title_bar_opacity.setOpacity(0.0)
+                self.setWindowOpacity(0.0)
                 self._apply_activity_page(target)
             phase = (progress - 0.5) / 0.5
-            self.title_bar_opacity.setOpacity(min(1.0, phase))
+            self.setWindowOpacity(min(1.0, phase))
 
         def finish():
-            self.title_bar_opacity.setOpacity(1.0)
+            self.setWindowOpacity(1.0)
             self._place_top_center()
             self.raise_()
             self._page_switch_animation = None
