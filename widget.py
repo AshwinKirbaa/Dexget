@@ -1889,6 +1889,7 @@ class JarvisWidget(QWidget):
     def _place_top_center(self):
         size = self._expanded_size() if self.is_expanded else self._compact_size()
         self.setGeometry(self._target_geometry(size))
+        self._apply_rounded_window_mask(size)
 
     def _animate_surface_to(self, size, duration=None,
                             curve=QEasingCurve.Type.OutCubic,
@@ -1919,6 +1920,9 @@ class JarvisWidget(QWidget):
         # retains its old centered screen rectangle inside the new canvas.
         self.setGeometry(self._target_geometry(canvas))
         self.main_layout.activate()
+        # Establish rounded native clipping before the first animation paint.
+        # Waiting until the completion callback exposes one square frame.
+        self._apply_rounded_window_mask(canvas)
 
         native_hide_issued = False
 
@@ -1959,6 +1963,9 @@ class JarvisWidget(QWidget):
                     Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
                 self.container.setFixedSize(size)
                 self.main_layout.activate()
+                # setGeometry triggers resizeEvent, which clears the old mask;
+                # replace it synchronously before Windows gets another paint.
+                self._apply_rounded_window_mask(size)
                 QTimer.singleShot(
                     0,
                     lambda: self._reassert_centered_surface(generation, size),
@@ -3325,7 +3332,9 @@ class JarvisWidget(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(0, self._place_top_center)
+        # Apply the mask in the same event that makes the native window
+        # visible, eliminating the initial rectangular flash.
+        self._place_top_center()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
