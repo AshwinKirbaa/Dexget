@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
 from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QParallelAnimationGroup, QVariantAnimation,
-                          QRectF, QAbstractAnimation, QSettings)
+                          QRectF, QAbstractAnimation, QSettings, QEvent)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap, QAction)
 
@@ -671,6 +671,8 @@ class JarvisWidget(QWidget):
         self._default_page_override = False
         self._activity_page = "default"
         self._swipe_start_pos = None
+        self._global_swipe_start = None
+        QApplication.instance().installEventFilter(self)
         self.screen_assist_worker = None
         self._screen_context = None
         self._headset_active = False
@@ -3469,6 +3471,26 @@ class JarvisWidget(QWidget):
             event.accept()
             return
         super().wheelEvent(event)
+
+    def eventFilter(self, watched, event):
+        # Child labels/buttons consume mouse events before the title bar gets
+        # them. Capture the gesture globally while it starts inside the island
+        # so paging works regardless of which part of the compact pill is hit.
+        if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            point = event.globalPosition().toPoint()
+            if self.isVisible() and self.geometry().contains(point):
+                self._global_swipe_start = point
+        elif event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+            start = self._global_swipe_start
+            self._global_swipe_start = None
+            if start is not None:
+                point = event.globalPosition().toPoint()
+                delta_x = point.x() - start.x()
+                if abs(delta_x) >= 55 and self.isVisible():
+                    self._swipe_start_pos = None
+                    self._cycle_activity_page(1 if delta_x > 0 else -1)
+                    return True
+        return super().eventFilter(watched, event)
 
     def title_mousePressEvent(self, event):
         self._begin_page_swipe(event)
