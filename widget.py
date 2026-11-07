@@ -1606,8 +1606,10 @@ class JarvisWidget(QWidget):
         return self._default_page_override or self._is_default_activity()
 
     def _sync_compact_surface(self):
-        default = bool(self._default_page_override or
-                       (self._activity_page == "default" and self._is_default_activity()))
+        default = bool((self._default_page_override or
+                        (self._activity_page == "default" and self._is_default_activity()))
+                       and not any((self._notification_active, self._headset_active,
+                                    self._low_power_active, self._charging_active)))
         timer_visible = bool(self._activity_page == "timer" and self._timer_active and not any((
             self._notification_active, self._headset_active,
             self._low_power_active, self._charging_active)))
@@ -1978,8 +1980,10 @@ class JarvisWidget(QWidget):
                 "https://www.google.com/search?q=" + urllib.parse.quote_plus(q))
 
     def _compact_size(self):
-        if self._default_page_override:
-            return self.COLLAPSED_SIZE
+        if self._displaying_default_page():
+            return QSize(max(self.COLLAPSED_SIZE.width(),
+                             self.default_status_widget.sizeHint().width() + 28),
+                         self.COLLAPSED_SIZE.height())
         if self._notification_active:
             return self.NOTIFICATION_SIZE
         if self._headset_active:
