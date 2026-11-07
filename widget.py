@@ -3506,10 +3506,22 @@ class JarvisWidget(QWidget):
             self._place_top_center()
             self.raise_()
             self._page_switch_animation = None
+            QTimer.singleShot(0, self._reapply_current_activity_mask)
 
         animation.valueChanged.connect(update)
         animation.finished.connect(finish)
         animation.start()
+
+    def _reapply_current_activity_mask(self):
+        """Restore rounded clipping after a compositor opacity transition."""
+        if self.is_expanded:
+            return
+        size = self._compact_size()
+        self.container.setFixedSize(size)
+        self.setGeometry(self._target_geometry(size))
+        self.main_layout.activate()
+        self._apply_rounded_window_mask(size)
+        self.update()
 
     def _set_activity_geometry(self, size):
         """Commit a page switch in one paint, avoiding intermediate flicker."""
@@ -3526,6 +3538,7 @@ class JarvisWidget(QWidget):
         self.setUpdatesEnabled(True)
         self.update()
         self.show()
+        QTimer.singleShot(0, self._reapply_current_activity_mask)
 
     def _begin_page_swipe(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
