@@ -1290,7 +1290,11 @@ class JarvisWidget(QWidget):
         self._focus_minutes = 25
         self._load_dashboard_tasks()
         self._load_pinned_clipboard()
-        self._show_dashboard_page("home")
+        # The idle control-center surface is intentionally not activated.
+        # Default mode remains a compact status pill; contextual activities
+        # (media, calls, timers, notifications) still own expansion.
+        self.dashboard_stack.setCurrentWidget(self.dashboard_pages["home"])
+        self.dashboard_nav_buttons["home"].setChecked(True)
         self.dashboard_widget.hide()
 
         feature_actions = QHBoxLayout()
@@ -2244,6 +2248,8 @@ class JarvisWidget(QWidget):
     def toggle_island(self):
         if self.is_expanded:
             self.collapse_island()
+        elif self._is_default_activity():
+            return
         else:
             self.expand_feature()
 
@@ -2293,7 +2299,7 @@ class JarvisWidget(QWidget):
         # is intentionally available only from the default compact island.
         self.feature_ai_btn.hide()
         media_mode = bool(self._media)
-        dashboard_mode = self._is_default_activity()
+        dashboard_mode = False
         for widget in (self.feature_eyebrow, self.feature_title,
                        self.feature_detail, self.feature_primary_btn):
             widget.setVisible(not media_mode and not dashboard_mode)
@@ -2301,8 +2307,6 @@ class JarvisWidget(QWidget):
         self.dashboard_widget.setVisible(dashboard_mode)
         if media_mode:
             self._update_media_feature_panel()
-        elif dashboard_mode:
-            self._refresh_dashboard_system_info()
 
     @staticmethod
     def _format_media_time(seconds):
