@@ -1622,6 +1622,8 @@ class JarvisWidget(QWidget):
             self._set_media_controls_visible(False)
             return
         if default:
+            self.name_label.clear()
+            self.status_label.clear()
             self.status_dot.hide()
             self.album_art.hide()
             self.identity_widget.hide()
@@ -3387,7 +3389,7 @@ class JarvisWidget(QWidget):
             self.identity_widget.show()
             self.call_mute_btn.show()
 
-    def show_default_page(self):
+    def show_default_page(self, animate=True):
         """Page away from a live activity without stopping the activity."""
         if self._is_default_activity():
             return
@@ -3405,9 +3407,9 @@ class JarvisWidget(QWidget):
         self._hide_activity_page_widgets()
         self._sync_compact_surface()
         self._update_default_status()
-        self._animate_to(self.COLLAPSED_SIZE, self.COMPACT_TRANSITION_MS)
+        self._animate_to(self.COLLAPSED_SIZE, self.COMPACT_TRANSITION_MS if animate else 1)
 
-    def show_activity_page(self):
+    def show_activity_page(self, animate=True):
         """Show the music/call activity page without stopping other activities."""
         self._default_page_override = False
         self._activity_page = "media" if (self._media or self._call_context) else "timer"
@@ -3418,7 +3420,7 @@ class JarvisWidget(QWidget):
         self.title_bar.show()
         self._sync_compact_surface()
         self._restore_activity_page_widgets()
-        self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS)
+        self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS if animate else 1)
         if self._call_context and not self._media:
             self._call_hide_timer.start(4500)
 
@@ -3431,17 +3433,24 @@ class JarvisWidget(QWidget):
         current = self._activity_page if self._activity_page in pages else pages[0]
         index = (pages.index(current) + direction) % len(pages)
         target = pages[index]
+        # Page changes are a state switch, not a resize animation. Avoid
+        # painting an intermediate geometry that makes navigation flicker.
+        if self._animation:
+            self._animation.stop()
         if target == "default":
-            self.show_default_page()
+            self.show_default_page(animate=False)
         elif target == "timer":
             self._default_page_override = False
             self._activity_page = "timer"
             self.is_expanded = False
             self.feature_panel.hide()
             self._sync_compact_surface()
-            self._animate_to(self.TIMER_SIZE, self.COMPACT_TRANSITION_MS)
+            self.container.setFixedSize(self.TIMER_SIZE)
+            self.setGeometry(self._target_geometry(self.TIMER_SIZE))
+            self._apply_rounded_window_mask(self.TIMER_SIZE)
+            self.show()
         else:
-            self.show_activity_page()
+            self.show_activity_page(animate=False)
 
     def _begin_page_swipe(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
