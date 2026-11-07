@@ -562,7 +562,9 @@ class DashboardSystemWorker(QThread):
 class JarvisWidget(QWidget):
     HIDDEN_SIZE = QSize(120, 4)
     MINIMIZE_SIZE = QSize(120, 32)
-    COLLAPSED_SIZE = QSize(370, 52)
+    # The idle surface contains only network, clock and battery status. Keep
+    # it tight instead of reserving the wider legacy identity/close controls.
+    COLLAPSED_SIZE = QSize(300, 52)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)

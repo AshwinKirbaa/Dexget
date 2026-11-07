@@ -649,6 +649,7 @@ def test_default_island_expands_without_resource_summary():
         widget._media = {}
         widget._sync_compact_surface()
         widget._update_default_status()
+        assert widget.COLLAPSED_SIZE.width() == 300
         assert not widget.default_status_widget.isHidden()
         assert widget.identity_widget.isHidden()
         assert widget.status_dot.isHidden()
