@@ -636,6 +636,42 @@ def test_playback_start_does_not_duplicate_compact_header_over_player():
         app.processEvents()
 
 
+def test_default_island_uses_status_bar_and_customizable_dashboard():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget._sync_compact_surface()
+        widget._update_default_status()
+        assert not widget.default_status_widget.isHidden()
+        assert widget.identity_widget.isHidden()
+        assert widget.status_dot.isHidden()
+        assert widget.screen_assist_btn.isHidden()
+        assert "AM" in widget.default_clock_label.text() or "PM" in widget.default_clock_label.text()
+
+        widget.expand_feature()
+        widget._animation.setCurrentTime(widget._animation.duration())
+        widget._show_feature_content()
+        app.processEvents()
+        assert not widget.dashboard_widget.isHidden()
+        assert widget.feature_title.isHidden()
+        assert widget._feature_expanded_size() == widget.DASHBOARD_EXPANDED_SIZE
+
+        widget._toggle_dashboard_settings()
+        assert not widget.dashboard_settings.isHidden()
+        widget._set_dashboard_preference("battery", True)
+        assert not widget.dashboard_added_widgets["battery"].isHidden()
+        widget._set_dashboard_preference("battery", False)
+    finally:
+        widget.worker.shutdown()
+        widget.media_worker.shutdown()
+        widget.worker.wait(2000)
+        widget.media_worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_interrupted_expand_does_not_reveal_stale_content():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:

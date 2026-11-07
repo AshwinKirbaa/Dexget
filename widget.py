@@ -5,14 +5,14 @@ import asyncio
 import time
 import os
 import glob
-from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout, 
+from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                              QFrame, QSizePolicy, QGraphicsDropShadowEffect,
-                             QGraphicsOpacityEffect, QSlider)
+                             QGraphicsOpacityEffect, QSlider, QGridLayout)
 from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QParallelAnimationGroup, QVariantAnimation,
-                          QRectF, QAbstractAnimation)
+                          QRectF, QAbstractAnimation, QSettings)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap)
 
@@ -470,7 +470,7 @@ class MessageWidget(QWidget):
 class JarvisWidget(QWidget):
     HIDDEN_SIZE = QSize(120, 4)
     MINIMIZE_SIZE = QSize(120, 32)
-    COLLAPSED_SIZE = QSize(300, 48)
+    COLLAPSED_SIZE = QSize(370, 52)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)
@@ -481,6 +481,7 @@ class JarvisWidget(QWidget):
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
     FEATURE_EXPANDED_SIZE = QSize(440, 230)
+    DASHBOARD_EXPANDED_SIZE = QSize(440, 260)
     MEDIA_FEATURE_MIN_WIDTH = 390
     MEDIA_FEATURE_MAX_WIDTH = 560
     MEDIA_FEATURE_HEIGHT = 160
@@ -578,7 +579,13 @@ class JarvisWidget(QWidget):
         self._feature_collapse_timer = QTimer(self)
         self._feature_collapse_timer.setSingleShot(True)
         self._feature_collapse_timer.timeout.connect(self._auto_collapse_feature)
+        self._status_timer = QTimer(self)
+        self._status_timer.setInterval(1000)
+        self._status_timer.timeout.connect(self._update_default_status)
         self.initUI()
+        self._update_default_status()
+        self._sync_compact_surface()
+        self._status_timer.start()
         # Copilot/startup presents only the compact island. The conversation
         # panel opens later when the user clicks the island.
         self.scroll_area.hide()
@@ -792,12 +799,34 @@ class JarvisWidget(QWidget):
             }
         """)
         self.close_btn.clicked.connect(QApplication.quit)
+
+        self.default_status_widget = QWidget()
+        default_status_layout = QHBoxLayout(self.default_status_widget)
+        default_status_layout.setContentsMargins(0, 0, 0, 0)
+        default_status_layout.setSpacing(8)
+        self.default_network_label = QLabel("Wi-Fi")
+        self.default_clock_label = QLabel("12:00 AM")
+        self.default_battery_label = QLabel("--%")
+        for label in (self.default_network_label, self.default_clock_label,
+                      self.default_battery_label):
+            label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+            label.setStyleSheet("color: white;")
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.default_network_label.setFixedWidth(100)
+        self.default_battery_label.setFixedWidth(76)
+        self.default_clock_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        default_status_layout.addWidget(self.default_network_label)
+        default_status_layout.addWidget(self.default_clock_label, 1)
+        default_status_layout.addWidget(self.default_battery_label)
+        self.default_status_widget.hide()
         
         title_layout.addWidget(self.status_dot)
         title_layout.addWidget(self.album_art)
         # The metadata block owns the remaining width. A separate stretch here
         # collapses this layout to zero because its labels use Ignored sizing.
         title_layout.addWidget(self.identity_widget, 1)
+        title_layout.addWidget(self.default_status_widget, 1)
         title_layout.addWidget(self.charging_label)
         title_layout.addWidget(self.low_power_label)
         title_layout.addWidget(self.notification_identity)
@@ -927,6 +956,75 @@ class JarvisWidget(QWidget):
         media_player_layout.addLayout(media_controls)
         self.media_feature_widget.hide()
 
+        self.dashboard_widget = QFrame()
+        dashboard_layout = QVBoxLayout(self.dashboard_widget)
+        dashboard_layout.setContentsMargins(0, 0, 0, 0)
+        dashboard_layout.setSpacing(10)
+        dashboard_title = QLabel("Quick widgets")
+        dashboard_title.setStyleSheet(
+            "color: white; font-size: 16px; font-weight: 700;")
+        dashboard_layout.addWidget(dashboard_title)
+        dashboard_grid = QGridLayout()
+        self.dashboard_grid = dashboard_grid
+        dashboard_grid.setHorizontalSpacing(8)
+        dashboard_grid.setVerticalSpacing(8)
+        self.dashboard_buttons = {}
+        actions = (
+            ("Timer", "Timer", lambda: self._launch_uri("ms-clock:timer")),
+            ("Notes", "Notes", lambda: self._launch_program("notepad.exe")),
+            ("Screen", "Screen Assist", self.start_screen_assist),
+            ("Settings", "Customize", self._toggle_dashboard_settings),
+        )
+        for index, (key, text_value, callback) in enumerate(actions):
+            button = QPushButton(text_value)
+            button.setFixedHeight(42)
+            button.clicked.connect(callback)
+            button.setStyleSheet("""
+                QPushButton { color: white; background: rgba(255,255,255,18);
+                              border: 1px solid rgba(255,255,255,30);
+                              border-radius: 12px; padding: 0 14px; }
+                QPushButton:hover { background: rgba(90,180,255,45); }
+            """)
+            dashboard_grid.addWidget(button, index // 2, index % 2)
+            self.dashboard_buttons[key] = button
+        dashboard_layout.addLayout(dashboard_grid)
+        self.dashboard_added_widgets = {}
+        optional_actions = (
+            ("battery", "Battery settings", lambda: self._launch_uri("ms-settings:batterysaver")),
+            ("audio", "Audio settings", lambda: self._launch_uri("ms-settings:sound")),
+        )
+        settings_store = QSettings("Dexget", "DynamicIsland")
+        for column, (key, label_text, callback) in enumerate(optional_actions):
+            button = QPushButton(label_text)
+            button.setFixedHeight(38)
+            button.clicked.connect(callback)
+            button.setStyleSheet(
+                "QPushButton { color:#d7eaff; background:rgba(70,140,210,30);"
+                " border:1px solid rgba(100,180,255,45); border-radius:10px; }")
+            button.setVisible(bool(settings_store.value(
+                f"dashboard/{key}", False, type=bool)))
+            dashboard_grid.addWidget(button, 2, column)
+            self.dashboard_added_widgets[key] = button
+        self.dashboard_settings = QFrame()
+        settings_layout = QHBoxLayout(self.dashboard_settings)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(8)
+        settings_layout.addWidget(QLabel("Add widgets:"))
+        self.dashboard_optional_buttons = {}
+        for key, label_text in (("battery", "Battery"), ("audio", "Audio")):
+            toggle = QPushButton(label_text)
+            toggle.setCheckable(True)
+            toggle.setChecked(bool(QSettings("Dexget", "DynamicIsland").value(
+                f"dashboard/{key}", False, type=bool)))
+            toggle.clicked.connect(
+                lambda checked, item=key: self._set_dashboard_preference(item, checked))
+            settings_layout.addWidget(toggle)
+            self.dashboard_optional_buttons[key] = toggle
+        settings_layout.addStretch()
+        dashboard_layout.addWidget(self.dashboard_settings)
+        self.dashboard_settings.hide()
+        self.dashboard_widget.hide()
+
         feature_actions = QHBoxLayout()
         feature_actions.setSpacing(8)
         self.feature_primary_btn = QPushButton("Screen Assist")
@@ -950,6 +1048,7 @@ class JarvisWidget(QWidget):
         feature_layout.addWidget(self.feature_title)
         feature_layout.addWidget(self.feature_detail)
         feature_layout.addWidget(self.media_feature_widget)
+        feature_layout.addWidget(self.dashboard_widget)
         feature_layout.addStretch()
         feature_layout.addLayout(feature_actions)
         self.feature_panel.hide()
@@ -1132,6 +1231,74 @@ class JarvisWidget(QWidget):
         self.next_btn.setVisible(visible)
         self.media_hide_btn.setVisible(visible)
 
+    def _is_default_activity(self):
+        return not any((self._media, self._notification_active,
+                        self._headset_active, self._low_power_active,
+                        self._charging_active, self._call_context))
+
+    def _sync_compact_surface(self):
+        default = self._is_default_activity()
+        self.default_status_widget.setVisible(default)
+        if default:
+            self.status_dot.hide()
+            self.identity_widget.hide()
+            self.screen_assist_btn.hide()
+        elif self._media or self._call_context:
+            self.default_status_widget.hide()
+            self.status_dot.show()
+            self.identity_widget.show()
+
+    def _update_default_status(self):
+        if not hasattr(self, "default_clock_label"):
+            return
+        from datetime import datetime
+        self.default_clock_label.setText(datetime.now().strftime("%I:%M %p").lstrip("0"))
+        connected = False
+        try:
+            import ctypes
+            flags = ctypes.c_ulong()
+            connected = bool(ctypes.windll.wininet.InternetGetConnectedState(
+                ctypes.byref(flags), 0))
+        except Exception:
+            pass
+        self.default_network_label.setText("Wi-Fi  Online" if connected else "Wi-Fi  Offline")
+        self.default_network_label.setStyleSheet(
+            f"color: {'#5ee68a' if connected else '#ff6961'};")
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+            percent = int(round(battery.percent)) if battery else None
+        except Exception:
+            percent = None
+        self.default_battery_label.setText(
+            f"Battery {percent}%" if percent is not None else "Battery --%")
+
+    @staticmethod
+    def _launch_uri(uri):
+        try:
+            os.startfile(uri)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _launch_program(program):
+        try:
+            import subprocess
+            subprocess.Popen([program])
+        except Exception:
+            pass
+
+    def _toggle_dashboard_settings(self):
+        self.dashboard_settings.setVisible(self.dashboard_settings.isHidden())
+        self._keep_feature_open()
+
+    def _set_dashboard_preference(self, key, enabled):
+        QSettings("Dexget", "DynamicIsland").setValue(
+            f"dashboard/{key}", bool(enabled))
+        if key in self.dashboard_added_widgets:
+            self.dashboard_added_widgets[key].setVisible(bool(enabled))
+        self._keep_feature_open()
+
     def _compact_size(self):
         if self._notification_active:
             return self.NOTIFICATION_SIZE
@@ -1176,6 +1343,8 @@ class JarvisWidget(QWidget):
             width = max(self.MEDIA_FEATURE_MIN_WIDTH,
                         min(self.MEDIA_FEATURE_MAX_WIDTH, width))
             return QSize(width, self.MEDIA_FEATURE_HEIGHT)
+        if self._is_default_activity():
+            return QSize(self.DASHBOARD_EXPANDED_SIZE)
         return QSize(max(self.FEATURE_EXPANDED_SIZE.width(),
                          self._compact_size().width()),
                      self.FEATURE_EXPANDED_SIZE.height())
@@ -1296,6 +1465,7 @@ class JarvisWidget(QWidget):
         self.scroll_area.hide()
         self.input_frame.hide()
         self.title_bar.show()
+        self._sync_compact_surface()
         self._visibility_generation += 1
         self._is_hiding = False
         was_hidden = self.isHidden() or self._auto_hidden or self.windowOpacity() < 0.1
@@ -1559,10 +1729,12 @@ class JarvisWidget(QWidget):
         # is intentionally available only from the default compact island.
         self.feature_ai_btn.hide()
         media_mode = bool(self._media)
+        dashboard_mode = self._is_default_activity()
         for widget in (self.feature_eyebrow, self.feature_title,
                        self.feature_detail, self.feature_primary_btn):
-            widget.setVisible(not media_mode)
+            widget.setVisible(not media_mode and not dashboard_mode)
         self.media_feature_widget.setVisible(media_mode)
+        self.dashboard_widget.setVisible(dashboard_mode)
         if media_mode:
             self._update_media_feature_panel()
 
