@@ -753,6 +753,32 @@ def test_timer_started_from_default_page_owns_compact_surface_over_media():
         app.processEvents()
 
 
+def test_music_and_timer_are_switchable_activity_pages():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.update_media({"title": "Song", "artist": "Artist", "playing": True})
+        widget.show_default_page()
+        widget.start_timer(60)
+        assert widget._activity_page == "timer"
+        widget._cycle_activity_page(1)
+        assert widget._activity_page == "media"
+        assert not widget.identity_widget.isHidden()
+        assert widget.timer_status_widget.isHidden()
+        widget._cycle_activity_page(-1)
+        assert widget._activity_page == "timer"
+        assert not widget.timer_status_widget.isHidden()
+        assert widget._media.get("title") == "Song"
+    finally:
+        widget.cancel_timer()
+        widget.worker.shutdown()
+        widget.media_worker.shutdown()
+        widget.worker.wait(2000)
+        widget.media_worker.wait(2000)
+        widget.close()
+        app.processEvents()
 def test_interrupted_expand_does_not_reveal_stale_content():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:

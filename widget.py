@@ -669,6 +669,7 @@ class JarvisWidget(QWidget):
         self._discord_log_offset = 0
         self._discord_rtc_active = False
         self._default_page_override = False
+        self._activity_page = "default"
         self._swipe_start_pos = None
         self.screen_assist_worker = None
         self._screen_context = None
@@ -1603,8 +1604,9 @@ class JarvisWidget(QWidget):
         return self._default_page_override or self._is_default_activity()
 
     def _sync_compact_surface(self):
-        default = self._displaying_default_page()
-        timer_visible = bool(not default and self._timer_active and not any((
+        default = bool(self._default_page_override or
+                       (self._activity_page == "default" and self._is_default_activity()))
+        timer_visible = bool(self._activity_page == "timer" and self._timer_active and not any((
             self._notification_active, self._headset_active,
             self._low_power_active, self._charging_active)))
         self.default_status_widget.setVisible(default)
@@ -1625,7 +1627,7 @@ class JarvisWidget(QWidget):
             self.close_btn.hide()
             self.call_mute_btn.hide()
             self._set_media_controls_visible(False)
-        elif self._media or self._call_context:
+        elif self._activity_page in ("media", "timer") and (self._media or self._call_context):
             self.default_status_widget.hide()
             self.status_dot.show()
             self.identity_widget.show()
@@ -1675,6 +1677,7 @@ class JarvisWidget(QWidget):
         # do not leave the page override in place or it will inherit the
         # background media player's geometry and surface routing.
         self._default_page_override = False
+        self._activity_page = "timer"
         self._expanded_view = "feature"
         # Tear down any expanded media/dashboard content before presenting the
         # timer activity.  This keeps the timer as a distinct island activity
@@ -1748,6 +1751,7 @@ class JarvisWidget(QWidget):
         self._timer_running = False
         self._timer_remaining = 0.0
         self._timer_deadline = None
+        self._activity_page = "media" if (self._media or self._call_context) else "default"
         self.timer_pause_btn.setEnabled(True)
         self.timer_status_widget.hide()
         self._sync_compact_surface()
@@ -2390,6 +2394,11 @@ class JarvisWidget(QWidget):
             self.expand_feature()
 
     def _feature_snapshot(self):
+        if self._activity_page == "timer" and self._timer_active:
+            return ("TIMER", self.timer_remaining_label.text(),
+                    "Running" if self._timer_running else "Paused",
+                    "Pause" if self._timer_running else "Resume",
+                    self.toggle_timer)
         if self._default_page_override:
             return ("DEXGET", "Ready", "Capture the current screen or open Dexget AI.",
                     "Screen Assist", self.start_screen_assist)
@@ -2409,7 +2418,7 @@ class JarvisWidget(QWidget):
             return ("BATTERY", "Charging", self.charging_percent.text(),
                     "Battery settings", lambda: self.worker.submit_text(
                         "open battery settings", display_text="Open battery settings"))
-        if self._timer_active:
+        if self._timer_active and self._activity_page == "timer":
             return ("TIMER", self.timer_remaining_label.text(),
                     "Running" if self._timer_running else "Paused",
                     "Pause" if self._timer_running else "Resume",
@@ -3364,9 +3373,9 @@ class JarvisWidget(QWidget):
             self.charging_label.show()
             self.charging_percent.show()
             self.battery_indicator.show()
-        elif self._timer_active:
+        elif self._timer_active and self._activity_page == "timer":
             self.timer_status_widget.show()
-        elif self._media:
+        elif self._media and self._activity_page == "media":
             self.status_dot.show()
             self.identity_widget.show()
             self._set_media_controls_visible(True)
@@ -3381,6 +3390,7 @@ class JarvisWidget(QWidget):
         if self._is_default_activity():
             return
         self._default_page_override = True
+        self._activity_page = "default"
         self._call_hide_timer.stop()
         self._collapse_timer.stop()
         self._feature_collapse_timer.stop()
@@ -3396,10 +3406,9 @@ class JarvisWidget(QWidget):
         self._animate_to(self.COLLAPSED_SIZE, self.COMPACT_TRANSITION_MS)
 
     def show_activity_page(self):
-        """Return from the default page to the still-running live activity."""
-        if not self._default_page_override:
-            return
+        """Show the music/call activity page without stopping other activities."""
         self._default_page_override = False
+        self._activity_page = "media" if (self._media or self._call_context) else "timer"
         self.is_expanded = False
         self.feature_panel.hide()
         self.scroll_area.hide()
@@ -3410,6 +3419,27 @@ class JarvisWidget(QWidget):
         self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS)
         if self._call_context and not self._media:
             self._call_hide_timer.start(4500)
+
+    def _cycle_activity_page(self, direction):
+        pages = ["default"]
+        if self._timer_active:
+            pages.append("timer")
+        if self._media or self._call_context:
+            pages.append("media")
+        current = self._activity_page if self._activity_page in pages else pages[0]
+        index = (pages.index(current) + direction) % len(pages)
+        target = pages[index]
+        if target == "default":
+            self.show_default_page()
+        elif target == "timer":
+            self._default_page_override = False
+            self._activity_page = "timer"
+            self.is_expanded = False
+            self.feature_panel.hide()
+            self._sync_compact_surface()
+            self._animate_to(self.TIMER_SIZE, self.COMPACT_TRANSITION_MS)
+        else:
+            self.show_activity_page()
 
     def _begin_page_swipe(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -3422,20 +3452,20 @@ class JarvisWidget(QWidget):
         self._swipe_start_pos = None
         delta_x = event.globalPosition().toPoint().x() - start.x()
         if delta_x <= -55:
-            self.show_default_page()
+            self._cycle_activity_page(-1)
         elif delta_x >= 55:
-            self.show_activity_page()
+            self._cycle_activity_page(1)
         elif allow_click and abs(delta_x) < 6:
             self.toggle_island()
 
     def wheelEvent(self, event):
         horizontal = event.pixelDelta().x() or event.angleDelta().x()
         if horizontal <= -20:
-            self.show_default_page()
+            self._cycle_activity_page(-1)
             event.accept()
             return
         if horizontal >= 20:
-            self.show_activity_page()
+            self._cycle_activity_page(1)
             event.accept()
             return
         super().wheelEvent(event)
