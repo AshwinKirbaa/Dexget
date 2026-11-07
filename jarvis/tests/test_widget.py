@@ -738,6 +738,43 @@ def test_interrupted_expand_does_not_reveal_stale_content():
         app.processEvents()
 
 
+def test_expanded_call_collapses_after_pointer_leaves_but_not_during_input():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget._call_context = "Discord"
+        widget._refresh_call_layout()
+        widget.expand_feature()
+        widget._animation.setCurrentTime(widget._animation.duration())
+        widget._show_feature_content()
+        assert widget.is_expanded
+
+        with patch.object(widget, "_pointer_inside_island", return_value=True):
+            widget._auto_collapse_expanded()
+            assert widget.is_expanded
+
+        with patch.object(widget, "_pointer_inside_island", return_value=False), \
+                patch.object(widget, "_input_interaction_active", return_value=False):
+            widget._auto_collapse_expanded()
+            assert not widget.is_expanded
+            assert widget._compact_size() == widget.CALL_SIZE
+
+        widget.expand_island()
+        with patch.object(widget, "_pointer_inside_island", return_value=False), \
+                patch.object(widget, "_input_interaction_active", return_value=True):
+            widget._auto_collapse_expanded()
+            assert widget.is_expanded
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_screen_assist_submits_visible_text_and_blocks_proctoring():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:

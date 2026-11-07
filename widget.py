@@ -678,7 +678,8 @@ class JarvisWidget(QWidget):
         self._call_hide_timer.timeout.connect(self.hide_call_island)
         self._feature_collapse_timer = QTimer(self)
         self._feature_collapse_timer.setSingleShot(True)
-        self._feature_collapse_timer.timeout.connect(self._auto_collapse_feature)
+        self._feature_collapse_timer.timeout.connect(self._auto_collapse_expanded)
+        self._last_input_activity = 0.0
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(1000)
         self._status_timer.timeout.connect(self._update_default_status)
@@ -1449,6 +1450,7 @@ class JarvisWidget(QWidget):
             }
         """)
         self.input_field.returnPressed.connect(self.send_message)
+        self.input_field.textEdited.connect(self._mark_input_activity)
         
         self.send_btn = QPushButton("↑")
         self.send_btn.setFixedSize(30, 30)
@@ -2189,7 +2191,7 @@ class JarvisWidget(QWidget):
             return
         if self.input_field.hasFocus() and self.input_field.text():
             return
-        if self._assistant_state == "Idle" and not self._media and not self._timer_active:
+        if self._assistant_state == "Idle" and self._is_default_activity():
             self.hide_idle_island()
             return
         self.is_expanded = False
@@ -2420,7 +2422,10 @@ class JarvisWidget(QWidget):
 
     def _keep_feature_open(self):
         if self.is_expanded and self._expanded_view == "feature":
-            self._feature_collapse_timer.start(5500)
+            if self._pointer_inside_island():
+                self._feature_collapse_timer.stop()
+            else:
+                self._feature_collapse_timer.start(1200)
 
     def _control_expanded_media(self, action):
         if action == "play_pause" and self._media:
@@ -2473,7 +2478,40 @@ class JarvisWidget(QWidget):
                 and generation == self._transition_generation)
             else None,
         )
-        self._feature_collapse_timer.start(5500)
+        # The panel remains open for direct interaction. leaveEvent starts the
+        # delayed collapse only after the pointer exits the whole island.
+        self._feature_collapse_timer.stop()
+
+    def _mark_input_activity(self, _text=None):
+        self._last_input_activity = time.monotonic()
+        self._feature_collapse_timer.stop()
+
+    def _pointer_inside_island(self):
+        local = self.mapFromGlobal(QCursor.pos())
+        return self.rect().contains(local)
+
+    def _input_interaction_active(self):
+        if not self.input_field.hasFocus():
+            return False
+        # Preserve an unsent draft indefinitely. An empty field is protected
+        # only while the user is actively typing, so merely retaining keyboard
+        # focus cannot pin the island open after the pointer leaves.
+        return bool(self.input_field.text()) or (
+            time.monotonic() - self._last_input_activity < 1.8)
+
+    def _auto_collapse_expanded(self):
+        """Collapse only after interaction has genuinely left the island."""
+        if not self.is_expanded:
+            return
+        if (self._pointer_inside_island() or self._input_interaction_active()
+                or self.worker.busy.is_set()
+                or not self.confirmation_panel.isHidden()):
+            self._feature_collapse_timer.start(900)
+            return
+        if self._expanded_view == "feature":
+            self._auto_collapse_feature()
+        else:
+            self.collapse_island()
 
     def _auto_collapse_feature(self):
         """Return a temporary feature surface to its compact live activity."""
@@ -3210,10 +3248,13 @@ class JarvisWidget(QWidget):
     def enterEvent(self, event):
         self.reveal_idle_island()
         self._hover_leave_at = None
+        self._feature_collapse_timer.stop()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        if not self.is_expanded and not self._media and not self._call_context:
+        if self.is_expanded:
+            self._feature_collapse_timer.start(1100)
+        elif not self._media and not self._call_context:
             self._hover_leave_at = time.monotonic()
         super().leaveEvent(event)
 
