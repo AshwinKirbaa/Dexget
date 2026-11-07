@@ -126,6 +126,80 @@ class BatteryIndicator(QWidget):
         painter.drawRoundedRect(QRectF(4.0, 5.0, fill_width, 14.0), 3.5, 3.5)
 
 
+class WifiStatusIndicator(QWidget):
+    """Compact network glyph for the idle Dynamic Island."""
+    def __init__(self):
+        super().__init__()
+        self.connected = False
+        self.setFixedSize(76, 28)
+
+    def set_connected(self, connected):
+        self.connected = bool(connected)
+        self.setToolTip("Internet connected" if self.connected else "Internet offline")
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor("#f5f7fa") if self.connected else QColor("#ff6961")
+        painter.setPen(QPen(color, 1.8, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap))
+        # Keep the glyph centered inside a field equal in width to the battery
+        # field so the clock remains geometrically centered on the screen.
+        cx = self.width() / 2
+        for width, y in ((20.0, 6.0), (14.0, 9.5), (8.0, 13.0)):
+            path = QPainterPath()
+            path.moveTo(cx - width / 2, y)
+            path.quadTo(cx, y - width * 0.43, cx + width / 2, y)
+            painter.drawPath(path)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(QPointF(cx, 19.5), 1.8, 1.8)
+
+
+class CompactBatteryStatus(QWidget):
+    """Battery outline, live charge fill and percentage for the idle island."""
+    def __init__(self):
+        super().__init__()
+        self.percent = None
+        self.charging = False
+        self.setFixedSize(76, 28)
+
+    def set_status(self, percent, charging=False):
+        self.percent = None if percent is None else max(0, min(100, int(percent)))
+        self.charging = bool(charging)
+        detail = "Battery unavailable" if self.percent is None else f"Battery {self.percent}%"
+        self.setToolTip(detail + (" (charging)" if self.charging else ""))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        outline = QColor("#f5f7fa")
+        body = QRectF(3.0, 8.0, 23.0, 12.0)
+        painter.setPen(QPen(outline, 1.4))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(body, 3.0, 3.0)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(outline)
+        painter.drawRoundedRect(QRectF(27.0, 11.0, 2.5, 6.0), 1.1, 1.1)
+        if self.percent is not None and self.percent > 0:
+            fill_color = QColor("#34c759")
+            if self.percent <= 10 and not self.charging:
+                fill_color = QColor("#ff453a")
+            elif self.percent <= 20 and not self.charging:
+                fill_color = QColor("#ffd60a")
+            fill_width = max(2.0, 19.0 * self.percent / 100.0)
+            painter.setBrush(fill_color)
+            painter.drawRoundedRect(QRectF(5.0, 10.0, fill_width, 8.0), 2.0, 2.0)
+        painter.setPen(outline)
+        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        text = "--%" if self.percent is None else f"{self.percent}%"
+        painter.drawText(QRectF(33.0, 0.0, 42.0, 28.0),
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                         text)
+
+
 class EarbudsIndicator(QWidget):
     def __init__(self):
         super().__init__()
@@ -831,21 +905,17 @@ class JarvisWidget(QWidget):
         default_status_layout = QHBoxLayout(self.default_status_widget)
         default_status_layout.setContentsMargins(0, 0, 0, 0)
         default_status_layout.setSpacing(8)
-        self.default_network_label = QLabel("Wi-Fi")
+        self.default_network_indicator = WifiStatusIndicator()
         self.default_clock_label = QLabel("12:00 AM")
-        self.default_battery_label = QLabel("--%")
-        for label in (self.default_network_label, self.default_clock_label,
-                      self.default_battery_label):
-            label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
-            label.setStyleSheet("color: white;")
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.default_network_label.setFixedWidth(100)
-        self.default_battery_label.setFixedWidth(76)
+        self.default_battery_indicator = CompactBatteryStatus()
+        self.default_clock_label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self.default_clock_label.setStyleSheet("color: white;")
+        self.default_clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.default_clock_label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        default_status_layout.addWidget(self.default_network_label)
+        default_status_layout.addWidget(self.default_network_indicator)
         default_status_layout.addWidget(self.default_clock_label, 1)
-        default_status_layout.addWidget(self.default_battery_label)
+        default_status_layout.addWidget(self.default_battery_indicator)
         self.default_status_widget.hide()
 
         self.timer_status_widget = QWidget()
@@ -1524,17 +1594,16 @@ class JarvisWidget(QWidget):
                 ctypes.byref(flags), 0))
         except Exception:
             pass
-        self.default_network_label.setText("Wi-Fi  Online" if connected else "Wi-Fi  Offline")
-        self.default_network_label.setStyleSheet(
-            f"color: {'#5ee68a' if connected else '#ff6961'};")
+        self.default_network_indicator.set_connected(connected)
         try:
             import psutil
             battery = psutil.sensors_battery()
             percent = int(round(battery.percent)) if battery else None
+            charging = bool(battery.power_plugged) if battery else False
         except Exception:
             percent = None
-        self.default_battery_label.setText(
-            f"Battery {percent}%" if percent is not None else "Battery --%")
+            charging = False
+        self.default_battery_indicator.set_status(percent, charging)
 
     @staticmethod
     def _format_countdown(seconds):
