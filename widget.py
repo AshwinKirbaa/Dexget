@@ -1075,7 +1075,8 @@ class JarvisWidget(QWidget):
                 button.clicked.connect(lambda checked=False, page=key: self._show_dashboard_page(page))
                 self.dashboard_nav_buttons[key] = button
             nav.addWidget(button)
-        dashboard_layout.addLayout(nav)
+        # The dashboard opens directly into its content. The former icon
+        # navigation strip and centre handle are intentionally not mounted.
 
         self.dashboard_stack = QStackedWidget()
         self.dashboard_pages = {}
