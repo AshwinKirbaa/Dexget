@@ -659,9 +659,9 @@ def test_default_island_expands_without_resource_summary():
         app.processEvents()
         assert widget.is_expanded
         assert not widget.dashboard_widget.isHidden()
-        assert not widget.dashboard_wifi_card.isHidden()
-        assert not widget.dashboard_bluetooth_card.isHidden()
-        assert not widget.dashboard_controls_card.isHidden()
+        assert widget.dashboard_wifi_card.isHidden()
+        assert widget.dashboard_bluetooth_card.isHidden()
+        assert widget.dashboard_controls_card.isHidden()
         assert widget.dashboard_stats_card.isHidden()
         assert not widget.dashboard_nav_buttons["home"].isHidden()
         assert widget.dashboard_stack.currentWidget() is widget.dashboard_pages["home"]
