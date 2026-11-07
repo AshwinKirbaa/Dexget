@@ -95,6 +95,46 @@ class MediaWaveformIndicator(QWidget):
             painter.drawLine(QPointF(x, 12 - height / 2), QPointF(x, 12 + height / 2))
 
 
+class TimerToggleButton(QPushButton):
+    """Font-independent circular pause/resume control for timer activities."""
+    def __init__(self):
+        super().__init__("Ⅱ")
+        self.setFixedSize(40, 40)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet("QPushButton { background: transparent; border: none; }")
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.isEnabled():
+            background = QColor("#74420f")
+            foreground = QColor("#a8a8a8")
+        elif self.isDown():
+            background = QColor("#954706")
+            foreground = QColor("#ffffff")
+        elif self.underMouse():
+            background = QColor("#d66b10")
+            foreground = QColor("#ffffff")
+        else:
+            background = QColor("#c65d00")
+            foreground = QColor("#ffffff")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(background)
+        painter.drawEllipse(QRectF(0.5, 0.5, 39.0, 39.0))
+        painter.setBrush(foreground)
+        cx, cy = 20.0, 20.0
+        if self.text() == "▶":
+            path = QPainterPath()
+            path.moveTo(cx - 4.5, cy - 8.0)
+            path.lineTo(cx - 4.5, cy + 8.0)
+            path.lineTo(cx + 8.0, cy)
+            path.closeSubpath()
+            painter.drawPath(path)
+        else:
+            painter.drawRoundedRect(QRectF(cx - 7.0, cy - 8.5, 5.0, 17.0), 1.2, 1.2)
+            painter.drawRoundedRect(QRectF(cx + 2.0, cy - 8.5, 5.0, 17.0), 1.2, 1.2)
+
+
 class BatteryIndicator(QWidget):
     """Small Apple-style battery glyph used by the charging Live Activity."""
     def __init__(self):
@@ -571,7 +611,7 @@ class JarvisWidget(QWidget):
     HEADSET_SIZE = QSize(350, 56)
     NOTIFICATION_SIZE = QSize(370, 64)
     CALL_SIZE = QSize(360, 52)
-    TIMER_SIZE = QSize(370, 58)
+    TIMER_SIZE = QSize(270, 58)
     MEDIA_MIN_WIDTH = 400
     MEDIA_BASE_WIDTH = 300
     EXPANDED_SIZE = QSize(440, 430)
@@ -929,15 +969,8 @@ class JarvisWidget(QWidget):
         timer_status_layout = QHBoxLayout(self.timer_status_widget)
         timer_status_layout.setContentsMargins(0, 0, 0, 0)
         timer_status_layout.setSpacing(10)
-        self.timer_pause_btn = QPushButton("Ⅱ")
-        self.timer_pause_btn.setFixedSize(40, 40)
+        self.timer_pause_btn = TimerToggleButton()
         self.timer_pause_btn.setToolTip("Pause timer")
-        self.timer_pause_btn.setStyleSheet("""
-            QPushButton { background: #b95a0a; color: white; border: none;
-                          border-radius: 20px; font-size: 17px; font-weight: 700; }
-            QPushButton:hover { background: #d66b10; }
-            QPushButton:pressed { background: #954706; }
-        """)
         self.timer_cancel_btn = QPushButton("×")
         self.timer_cancel_btn.setFixedSize(40, 40)
         self.timer_cancel_btn.setToolTip("Cancel timer")
@@ -956,7 +989,7 @@ class JarvisWidget(QWidget):
         self.timer_remaining_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         timer_status_layout.addWidget(self.timer_pause_btn)
         timer_status_layout.addWidget(self.timer_cancel_btn)
-        timer_status_layout.addStretch(1)
+        timer_status_layout.addSpacing(6)
         timer_status_layout.addWidget(self.timer_caption_label)
         timer_status_layout.addWidget(self.timer_remaining_label)
         self.timer_pause_btn.clicked.connect(self.toggle_timer)

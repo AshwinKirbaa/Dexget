@@ -688,6 +688,8 @@ def test_timer_activity_counts_down_and_restores_default_surface():
         assert widget._timer_active
         assert widget._timer_running
         assert widget._compact_size() == widget.TIMER_SIZE
+        assert widget.TIMER_SIZE.width() == 270
+        assert widget.timer_pause_btn.__class__.__name__ == "TimerToggleButton"
         assert not widget.timer_status_widget.isHidden()
         assert widget.default_status_widget.isHidden()
         assert widget.timer_remaining_label.text() == "3:35"
