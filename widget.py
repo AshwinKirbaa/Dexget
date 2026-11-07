@@ -672,6 +672,7 @@ class JarvisWidget(QWidget):
         self._activity_page = "default"
         self._swipe_start_pos = None
         self._global_swipe_start = None
+        self._last_page_switch = 0.0
         QApplication.instance().installEventFilter(self)
         self.screen_assist_worker = None
         self._screen_context = None
@@ -3441,6 +3442,10 @@ class JarvisWidget(QWidget):
             self._call_hide_timer.start(4500)
 
     def _cycle_activity_page(self, direction):
+        now = time.monotonic()
+        if now - self._last_page_switch < 0.28:
+            return
+        self._last_page_switch = now
         pages = ["default"]
         if self._timer_active:
             pages.append("timer")
@@ -3472,7 +3477,9 @@ class JarvisWidget(QWidget):
         self._transition_generation += 1
         self.is_expanded = False
         self.container.setFixedSize(size)
+        self.main_layout.activate()
         self.setGeometry(self._target_geometry(size))
+        self.main_layout.activate()
         self._apply_rounded_window_mask(size)
         self.show()
 
