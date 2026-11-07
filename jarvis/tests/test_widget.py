@@ -305,7 +305,8 @@ def test_charger_connection_shows_live_activity_and_restores_state():
         assert not widget._charging_active
         assert widget.charging_label.isHidden()
         assert not widget.identity_widget.isHidden()
-        assert not widget.close_btn.isHidden()
+        assert widget.close_btn.isHidden()
+        assert widget.tray_force_close_action.text() == "Force close Dexget"
         assert widget.worker.isRunning()
         assert widget.media_worker.isRunning()
     finally:
@@ -342,7 +343,8 @@ def test_headset_connection_shows_live_activity_and_restores_state():
         assert widget.earbuds_indicator.isHidden()
         assert widget.connection_ring.isHidden()
         assert not widget.identity_widget.isHidden()
-        assert not widget.close_btn.isHidden()
+        assert widget.close_btn.isHidden()
+        assert widget.tray_force_close_action.text() == "Force close Dexget"
         assert widget.worker.isRunning()
         assert widget.media_worker.isRunning()
     finally:

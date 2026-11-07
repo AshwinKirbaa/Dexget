@@ -9,13 +9,13 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                         QFrame, QSizePolicy, QGraphicsDropShadowEffect, QInputDialog,
                              QGraphicsOpacityEffect, QSlider, QGridLayout,
-                             QStackedWidget)
+                             QStackedWidget, QSystemTrayIcon, QMenu)
 from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QParallelAnimationGroup, QVariantAnimation,
                           QRectF, QAbstractAnimation, QSettings)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
-                         QPainterPath, QRegion, QCursor, QPixmap)
+                         QPainterPath, QRegion, QCursor, QPixmap, QAction)
 
 import jarvis_integration
 
@@ -684,6 +684,7 @@ class JarvisWidget(QWidget):
         self._countdown_timer.setInterval(200)
         self._countdown_timer.timeout.connect(self._tick_countdown)
         self.initUI()
+        self._init_system_tray()
         self._update_default_status()
         self._sync_compact_surface()
         self._status_timer.start()
@@ -886,7 +887,9 @@ class JarvisWidget(QWidget):
         self.call_mute_btn.clicked.connect(self.toggle_call_mute)
         self.call_mute_btn.hide()
         
-        self.close_btn = QPushButton("✕")
+        # Retained as a hidden compatibility handle for older integrations.
+        # Closing Dexget now lives exclusively in its system-tray menu.
+        self.close_btn = QPushButton("✕", self)
         self.close_btn.setFixedSize(24, 24)
         self.close_btn.setStyleSheet("""
             QPushButton {
@@ -899,7 +902,8 @@ class JarvisWidget(QWidget):
                 color: #ff4444;
             }
         """)
-        self.close_btn.clicked.connect(QApplication.quit)
+        self.close_btn.clicked.connect(self.force_close)
+        self.close_btn.hide()
 
         self.default_status_widget = QWidget()
         default_status_layout = QHBoxLayout(self.default_status_widget)
@@ -981,7 +985,6 @@ class JarvisWidget(QWidget):
         title_layout.addWidget(self.media_hide_btn)
         title_layout.addWidget(self.call_mute_btn)
         title_layout.addWidget(self.screen_assist_btn)
-        title_layout.addWidget(self.close_btn)
         self._set_media_controls_visible(False)
         
         # Event filters for dragging
@@ -1574,12 +1577,12 @@ class JarvisWidget(QWidget):
             self.status_dot.hide()
             self.identity_widget.hide()
             self.screen_assist_btn.hide()
-            self.close_btn.show()
+            self.close_btn.hide()
         elif self._media or self._call_context:
             self.default_status_widget.hide()
             self.status_dot.show()
             self.identity_widget.show()
-            self.close_btn.show()
+            self.close_btn.hide()
 
     def _update_default_status(self):
         if not hasattr(self, "default_clock_label"):
@@ -3019,7 +3022,7 @@ class JarvisWidget(QWidget):
         self.battery_indicator.hide()
         self.status_dot.show()
         self.identity_widget.show()
-        self.close_btn.show()
+        self.close_btn.hide()
         self.screen_assist_btn.show()
         if not restore:
             return
@@ -3075,7 +3078,7 @@ class JarvisWidget(QWidget):
         self.connection_ring.hide()
         self.status_dot.show()
         self.identity_widget.show()
-        self.close_btn.show()
+        self.close_btn.hide()
         self.screen_assist_btn.show()
         if self._media:
             self._set_media_controls_visible(True)
@@ -3131,7 +3134,7 @@ class JarvisWidget(QWidget):
         self.low_power_battery.hide()
         self.status_dot.show()
         self.identity_widget.show()
-        self.close_btn.show()
+        self.close_btn.hide()
         self.screen_assist_btn.show()
         if self._media:
             self._set_media_controls_visible(True)
@@ -3189,7 +3192,7 @@ class JarvisWidget(QWidget):
         self.title_bar.setFixedHeight(48)
         self.status_dot.show()
         self.identity_widget.show()
-        self.close_btn.show()
+        self.close_btn.hide()
         self.screen_assist_btn.show()
         if self._media:
             self._set_media_controls_visible(True)
@@ -3360,19 +3363,94 @@ class JarvisWidget(QWidget):
         self.confirmation_panel.hide()
         self.worker.answer_confirmation(approved)
 
-    def closeEvent(self, event):
-        if self.worker.isRunning():
-            self._closing = True
-            if hasattr(self, "media_worker"):
-                self.media_worker.shutdown()
-            if self.screen_assist_worker and self.screen_assist_worker.isRunning():
-                self.screen_assist_worker.requestInterruption()
-                self.screen_assist_worker.wait(1500)
+    @staticmethod
+    def _tray_icon():
+        """Create a crisp Dexget service icon without an external asset."""
+        pixmap = QPixmap(64, 64)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#3d4652"), 2.0))
+        painter.setBrush(QColor("#0b0e12"))
+        painter.drawEllipse(QRectF(4, 4, 56, 56))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#65d8ff"))
+        diamond = QPainterPath()
+        diamond.moveTo(32, 12)
+        diamond.lineTo(38, 26)
+        diamond.lineTo(52, 32)
+        diamond.lineTo(38, 38)
+        diamond.lineTo(32, 52)
+        diamond.lineTo(26, 38)
+        diamond.lineTo(12, 32)
+        diamond.lineTo(26, 26)
+        diamond.closeSubpath()
+        painter.drawPath(diamond)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _init_system_tray(self):
+        """Keep lifecycle controls in the Windows notification/service area."""
+        app = QApplication.instance()
+        if app:
+            app.setQuitOnLastWindowClosed(False)
+            if app.windowIcon().isNull():
+                app.setWindowIcon(self._tray_icon())
+
+        self.tray_menu = QMenu()
+        self.tray_open_action = QAction("Open Dynamic Island", self)
+        self.tray_open_action.triggered.connect(self.activate_island)
+        self.tray_menu.addAction(self.tray_open_action)
+        self.tray_menu.addSeparator()
+        self.tray_force_close_action = QAction("Force close Dexget", self)
+        self.tray_force_close_action.triggered.connect(self.force_close)
+        self.tray_menu.addAction(self.tray_force_close_action)
+
+        self.tray_icon = QSystemTrayIcon(self._tray_icon(), self)
+        self.tray_icon.setToolTip("Dexget — running in the background")
+        self.tray_icon.setContextMenu(self.tray_menu)
+        self.tray_icon.activated.connect(self._tray_activated)
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray_icon.show()
+
+    def _tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
+            self.activate_island()
+
+    def force_close(self):
+        """Terminate the background service from the explicit tray command."""
+        if getattr(self, "_force_closing", False):
+            return
+        self._force_closing = True
+        self._closing = True
+        if hasattr(self, "tray_icon"):
+            self.tray_icon.hide()
+        for timer in (self._status_timer, self._call_timer, self._hover_timer,
+                      self._feature_collapse_timer, self._countdown_timer):
+            timer.stop()
+        if hasattr(self, "media_worker") and self.media_worker.isRunning():
+            self.media_worker.shutdown()
+            self.media_worker.wait(2000)
+        if self.screen_assist_worker and self.screen_assist_worker.isRunning():
+            self.screen_assist_worker.requestInterruption()
+            self.screen_assist_worker.wait(1500)
+        if hasattr(self, "worker") and self.worker.isRunning():
             self.worker.shutdown()
+            self.worker.wait(2500)
+        self.close()
+        app = QApplication.instance()
+        if app:
+            app.quit()
+
+    def closeEvent(self, event):
+        worker_running = hasattr(self, "worker") and self.worker.isRunning()
+        if not getattr(self, "_force_closing", False) and worker_running:
+            # Ordinary close/minimize requests keep the tray service alive.
             self.hide()
             event.ignore()
-        else:
-            event.accept()
+            return
+        event.accept()
 
     def add_message(self, role, text):
         if hasattr(self, "worker") and (self.worker.busy.is_set() or role == "User"):
