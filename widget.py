@@ -1983,11 +1983,18 @@ class JarvisWidget(QWidget):
 
     def _expanded_size(self):
         """Preserve the content-aware media width while opening the panel."""
+        if self._default_page_override:
+            return QSize(self.DASHBOARD_EXPANDED_SIZE)
         compact_width = self._compact_size().width()
         return QSize(max(self.EXPANDED_SIZE.width(), compact_width),
                      self.EXPANDED_SIZE.height())
 
     def _feature_expanded_size(self):
+        # Size from the page the user is viewing, not merely from background
+        # activity. A swiped-away media session must not lend its player size
+        # to the default dashboard page.
+        if self._displaying_default_page():
+            return QSize(self.DASHBOARD_EXPANDED_SIZE)
         if self._media:
             title = self._media.get("title") or "Now playing"
             artist = self._media.get("artist") or self._media.get("app") or "Media"
@@ -2001,14 +2008,17 @@ class JarvisWidget(QWidget):
             width = max(self.MEDIA_FEATURE_MIN_WIDTH,
                         min(self.MEDIA_FEATURE_MAX_WIDTH, width))
             return QSize(width, self.MEDIA_FEATURE_HEIGHT)
-        if self._is_default_activity():
-            return QSize(self.DASHBOARD_EXPANDED_SIZE)
         return QSize(max(self.FEATURE_EXPANDED_SIZE.width(),
                          self._compact_size().width()),
                      self.FEATURE_EXPANDED_SIZE.height())
 
     def _place_top_center(self):
-        size = self._expanded_size() if self.is_expanded else self._compact_size()
+        if self.is_expanded and self._expanded_view == "feature":
+            size = self._feature_expanded_size()
+        elif self.is_expanded:
+            size = self._expanded_size()
+        else:
+            size = self._compact_size()
         self.setGeometry(self._target_geometry(size))
         self._apply_rounded_window_mask(size)
 

@@ -583,6 +583,7 @@ def test_compact_click_opens_feature_before_dexget_ai():
         assert widget.feature_panel.isHidden()
 
         widget.expand_feature()
+        assert widget._feature_expanded_size() == widget.DASHBOARD_EXPANDED_SIZE
         widget._animation.setCurrentTime(widget._animation.duration())
         widget._show_feature_content()
 
@@ -806,6 +807,37 @@ def test_activity_page_swipe_preserves_call_and_restores_it():
         assert widget._call_context == "Discord"
         assert widget._compact_size() == widget.CALL_SIZE
         assert not widget.call_mute_btn.isHidden()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
+def test_default_page_expands_to_dashboard_size_while_media_continues():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.update_media({
+            "title": "SEM DEMORA (Slowed)", "artist": "DJ Samir",
+            "app": "YouTube Music", "playing": True,
+            "position": 53, "duration": 163,
+        })
+        widget.show_default_page()
+        assert widget._default_page_override
+        assert widget._feature_expanded_size() == widget.DASHBOARD_EXPANDED_SIZE
+        assert widget._expanded_size() == widget.DASHBOARD_EXPANDED_SIZE
+
+        widget.expand_feature()
+        widget._animation.setCurrentTime(widget._animation.duration())
+        widget._show_feature_content()
+        assert widget.dashboard_widget.isVisible()
+        assert widget.media_feature_widget.isHidden()
+        assert widget._media.get("title") == "SEM DEMORA (Slowed)"
     finally:
         widget.media_worker.shutdown()
         widget.media_worker.wait(2000)
