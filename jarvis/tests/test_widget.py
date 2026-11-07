@@ -636,7 +636,7 @@ def test_playback_start_does_not_duplicate_compact_header_over_player():
         app.processEvents()
 
 
-def test_default_island_expands_without_removed_system_controls():
+def test_default_island_expands_without_resource_summary():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:
         build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
@@ -659,9 +659,11 @@ def test_default_island_expands_without_removed_system_controls():
         app.processEvents()
         assert widget.is_expanded
         assert not widget.dashboard_widget.isHidden()
-        assert widget.dashboard_wifi_card.isHidden()
-        assert widget.dashboard_bluetooth_card.isHidden()
-        assert widget.dashboard_controls_card.isHidden()
+        assert not widget.dashboard_wifi_card.isHidden()
+        assert not widget.dashboard_bluetooth_card.isHidden()
+        assert not widget.dashboard_controls_card.isHidden()
+        assert widget.dashboard_stats_card.isHidden()
+        assert not widget.dashboard_nav_buttons["home"].isHidden()
         assert widget.dashboard_stack.currentWidget() is widget.dashboard_pages["home"]
     finally:
         widget.worker.shutdown()

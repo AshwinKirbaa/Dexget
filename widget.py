@@ -483,6 +483,34 @@ class DashboardSystemWorker(QThread):
             data["battery"] = int(battery.percent) if battery else None
         except Exception:
             pass
+        com_initialized = False
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            com_initialized = True
+        except Exception:
+            pass
+        try:
+            from jarvis.capabilities import windows_system
+            wifi = windows_system.wifi_get_status()
+            data["wifi"] = wifi.output if wifi.success else "Unavailable"
+            bluetooth = windows_system.bluetooth_get_status()
+            data["bluetooth"] = (
+                bluetooth.output if bluetooth.success else "Unavailable")
+            volume = windows_system.volume_get()
+            if volume.success:
+                data["volume"] = int(float(volume.output))
+            brightness = windows_system.brightness_get()
+            if brightness is not None:
+                data["brightness"] = int(brightness)
+        except Exception:
+            pass
+        finally:
+            if com_initialized:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
         self.info_ready.emit(data)
 
 class JarvisWidget(QWidget):
@@ -1075,8 +1103,7 @@ class JarvisWidget(QWidget):
                 button.clicked.connect(lambda checked=False, page=key: self._show_dashboard_page(page))
                 self.dashboard_nav_buttons[key] = button
             nav.addWidget(button)
-        # The dashboard opens directly into its content. The former icon
-        # navigation strip and centre handle are intentionally not mounted.
+        dashboard_layout.addLayout(nav)
 
         self.dashboard_stack = QStackedWidget()
         self.dashboard_pages = {}
@@ -1148,6 +1175,7 @@ class JarvisWidget(QWidget):
         home_grid.addWidget(controls, 0, 1, 2, 1)
 
         stats = QFrame()
+        self.dashboard_stats_card = stats
         stats.setStyleSheet("QFrame { background:#151517; border-radius:14px; }")
         stats_layout = QHBoxLayout(stats)
         self.dashboard_cpu = QLabel("CPU  --%")
@@ -1160,10 +1188,8 @@ class JarvisWidget(QWidget):
         focus_button = QPushButton("☾  Focus")
         focus_button.clicked.connect(lambda: self._show_dashboard_page("focus"))
         stats_layout.addWidget(focus_button)
-        home_grid.addWidget(stats, 0, 0, 1, 2)
-        self.dashboard_wifi_card.hide()
-        self.dashboard_bluetooth_card.hide()
-        self.dashboard_controls_card.hide()
+        # CPU, RAM and battery summary section intentionally removed.
+        stats.hide()
         home_grid.setColumnStretch(0, 1)
         home_grid.setColumnStretch(1, 1)
 
@@ -1248,6 +1274,9 @@ class JarvisWidget(QWidget):
         settings_layout = QGridLayout(settings)
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_actions = (
+            ("Wi-Fi settings", "ms-settings:network-wifi"),
+            ("Bluetooth settings", "ms-settings:bluetooth"),
+            ("Sound settings", "ms-settings:sound"),
             ("Battery settings", "ms-settings:batterysaver"),
             ("Notifications", "ms-settings:notifications"),
             ("Dynamic Island preferences", "ms-settings:appsfeatures"),
