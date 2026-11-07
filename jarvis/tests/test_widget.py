@@ -777,6 +777,44 @@ def test_expanded_call_collapses_after_pointer_leaves_but_not_during_input():
         app.processEvents()
 
 
+def test_activity_page_swipe_preserves_call_and_restores_it():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget._call_context = "Discord"
+        widget._refresh_call_layout()
+        assert not widget.call_mute_btn.isHidden()
+
+        widget.show_default_page()
+        app.processEvents()
+        assert widget._default_page_override
+        assert widget._call_context == "Discord"
+        assert widget._compact_size() == widget.COLLAPSED_SIZE
+        assert not widget.default_status_widget.isHidden()
+        assert widget.call_mute_btn.isHidden()
+
+        widget.expand_feature()
+        widget._animation.setCurrentTime(widget._animation.duration())
+        widget._show_feature_content()
+        assert not widget.dashboard_widget.isHidden()
+
+        widget.show_activity_page()
+        app.processEvents()
+        assert not widget._default_page_override
+        assert widget._call_context == "Discord"
+        assert widget._compact_size() == widget.CALL_SIZE
+        assert not widget.call_mute_btn.isHidden()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_screen_assist_submits_visible_text_and_blocks_proctoring():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:

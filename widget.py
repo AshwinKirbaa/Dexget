@@ -668,6 +668,8 @@ class JarvisWidget(QWidget):
         self._discord_log_path = None
         self._discord_log_offset = 0
         self._discord_rtc_active = False
+        self._default_page_override = False
+        self._swipe_start_pos = None
         self.screen_assist_worker = None
         self._screen_context = None
         self._headset_active = False
@@ -1037,6 +1039,8 @@ class JarvisWidget(QWidget):
             QLabel#FeatureDetail { color: #aeb5bf; font-size: 12px; }
         """)
         self.feature_panel.setObjectName("FeaturePanel")
+        self.feature_panel.mousePressEvent = self.feature_mousePressEvent
+        self.feature_panel.mouseReleaseEvent = self.feature_mouseReleaseEvent
         feature_layout = QVBoxLayout(self.feature_panel)
         feature_layout.setContentsMargins(22, 14, 22, 14)
         feature_layout.setSpacing(7)
@@ -1595,9 +1599,12 @@ class JarvisWidget(QWidget):
                         self._charging_active, self._call_context,
                         self._timer_active))
 
+    def _displaying_default_page(self):
+        return self._default_page_override or self._is_default_activity()
+
     def _sync_compact_surface(self):
-        default = self._is_default_activity()
-        timer_visible = bool(self._timer_active and not any((
+        default = self._displaying_default_page()
+        timer_visible = bool(not default and self._timer_active and not any((
             self._notification_active, self._headset_active,
             self._low_power_active, self._charging_active)))
         self.default_status_widget.setVisible(default)
@@ -1612,9 +1619,12 @@ class JarvisWidget(QWidget):
             return
         if default:
             self.status_dot.hide()
+            self.album_art.hide()
             self.identity_widget.hide()
             self.screen_assist_btn.hide()
             self.close_btn.hide()
+            self.call_mute_btn.hide()
+            self._set_media_controls_visible(False)
         elif self._media or self._call_context:
             self.default_status_widget.hide()
             self.status_dot.show()
@@ -1944,6 +1954,8 @@ class JarvisWidget(QWidget):
                 "https://www.google.com/search?q=" + urllib.parse.quote_plus(q))
 
     def _compact_size(self):
+        if self._default_page_override:
+            return self.COLLAPSED_SIZE
         if self._notification_active:
             return self.NOTIFICATION_SIZE
         if self._headset_active:
@@ -2356,6 +2368,9 @@ class JarvisWidget(QWidget):
             self.expand_feature()
 
     def _feature_snapshot(self):
+        if self._default_page_override:
+            return ("DEXGET", "Ready", "Capture the current screen or open Dexget AI.",
+                    "Screen Assist", self.start_screen_assist)
         if self._notification_active:
             return ("NOTIFICATION", self.notification_title.text(),
                     self.notification_body.text(), "Dismiss",
@@ -2400,8 +2415,8 @@ class JarvisWidget(QWidget):
         # Contextual activities stay focused on their own controls.  Dexget AI
         # is intentionally available only from the default compact island.
         self.feature_ai_btn.hide()
-        media_mode = bool(self._media)
-        dashboard_mode = self._is_default_activity()
+        dashboard_mode = self._displaying_default_page()
+        media_mode = bool(self._media) and not dashboard_mode
         for widget in (self.feature_eyebrow, self.feature_title,
                        self.feature_detail, self.feature_primary_btn):
             widget.setVisible(not media_mode and not dashboard_mode)
@@ -2483,7 +2498,7 @@ class JarvisWidget(QWidget):
     def _show_feature_content(self):
         if self.is_expanded and self._expanded_view == "feature":
             self.title_bar.setVisible(
-                not bool(self._media) and not self._is_default_activity())
+                not bool(self._media) and not self._displaying_default_page())
             self.feature_panel.show()
 
     def expand_feature(self):
@@ -2501,7 +2516,8 @@ class JarvisWidget(QWidget):
         self._prepare_feature_panel()
         # The expanded player is a single unified surface; do not stack the
         # compact media pill above it and duplicate artwork/title/controls.
-        self.title_bar.setVisible(not bool(self._media))
+        self.title_bar.setVisible(
+            not bool(self._media) and not self._displaying_default_page())
         generation = self._animate_to(
             self._feature_expanded_size(), self.PANEL_TRANSITION_MS)
         QTimer.singleShot(
@@ -2854,6 +2870,10 @@ class JarvisWidget(QWidget):
             self.status_dot.setStyleSheet(
                 f"color: {'#ff453a' if self._call_muted else '#30d158'}; font-size: 15px;")
             self.call_mute_btn.setText("Unmute" if self._call_muted else "Mute")
+            if self._default_page_override:
+                self.call_mute_btn.hide()
+                self._sync_compact_surface()
+                return
             self.call_mute_btn.show()
             self.screen_assist_btn.hide()
             if not self.is_expanded:
@@ -3100,7 +3120,7 @@ class JarvisWidget(QWidget):
         if not restore:
             return
         if self._media:
-            self._set_media_controls_visible(True)
+            self._set_media_controls_visible(not self._default_page_override)
         if self._pre_charging_expanded:
             self.expand_island()
         elif self._media and self._media.get("playing"):
@@ -3291,14 +3311,124 @@ class JarvisWidget(QWidget):
             self._hover_leave_at = time.monotonic()
         super().leaveEvent(event)
 
-    def title_mousePressEvent(self, event):
+    def _hide_activity_page_widgets(self):
+        for widget in (self.charging_label, self.charging_percent,
+                       self.battery_indicator, self.low_power_label,
+                       self.low_power_percent, self.low_power_battery,
+                       self.notification_icon, self.notification_identity,
+                       self.earbuds_indicator, self.headset_identity,
+                       self.connection_ring, self.timer_status_widget):
+            widget.hide()
+        self.status_dot.hide()
+        self.identity_widget.hide()
+        self.call_mute_btn.hide()
+        self._set_media_controls_visible(False)
+
+    def _restore_activity_page_widgets(self):
+        self.default_status_widget.hide()
+        self.screen_assist_btn.hide()
+        if self._notification_active:
+            self.notification_icon.show()
+            self.notification_identity.show()
+        elif self._headset_active:
+            self.earbuds_indicator.show()
+            self.headset_identity.show()
+            self.connection_ring.show()
+        elif self._low_power_active:
+            self.low_power_label.show()
+            self.low_power_percent.show()
+            self.low_power_battery.show()
+        elif self._charging_active:
+            self.charging_label.show()
+            self.charging_percent.show()
+            self.battery_indicator.show()
+        elif self._timer_active:
+            self.timer_status_widget.show()
+        elif self._media:
+            self.status_dot.show()
+            self.identity_widget.show()
+            self._set_media_controls_visible(True)
+            self.call_mute_btn.setVisible(bool(self._call_context))
+        elif self._call_context:
+            self.status_dot.show()
+            self.identity_widget.show()
+            self.call_mute_btn.show()
+
+    def show_default_page(self):
+        """Page away from a live activity without stopping the activity."""
+        if self._is_default_activity():
+            return
+        self._default_page_override = True
+        self._call_hide_timer.stop()
+        self._collapse_timer.stop()
+        self._feature_collapse_timer.stop()
+        self.is_expanded = False
+        self._expanded_view = "feature"
+        self.feature_panel.hide()
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.title_bar.show()
+        self._hide_activity_page_widgets()
+        self._sync_compact_surface()
+        self._update_default_status()
+        self._animate_to(self.COLLAPSED_SIZE, self.COMPACT_TRANSITION_MS)
+
+    def show_activity_page(self):
+        """Return from the default page to the still-running live activity."""
+        if not self._default_page_override:
+            return
+        self._default_page_override = False
+        self.is_expanded = False
+        self.feature_panel.hide()
+        self.scroll_area.hide()
+        self.input_frame.hide()
+        self.title_bar.show()
+        self._sync_compact_surface()
+        self._restore_activity_page_widgets()
+        self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS)
+        if self._call_context and not self._media:
+            self._call_hide_timer.start(4500)
+
+    def _begin_page_swipe(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self._title_press_pos = event.globalPosition().toPoint()
+            self._swipe_start_pos = event.globalPosition().toPoint()
+
+    def _finish_page_swipe(self, event, allow_click=False):
+        if event.button() != Qt.MouseButton.LeftButton or self._swipe_start_pos is None:
+            return
+        start = self._swipe_start_pos
+        self._swipe_start_pos = None
+        delta_x = event.globalPosition().toPoint().x() - start.x()
+        if delta_x <= -55:
+            self.show_default_page()
+        elif delta_x >= 55:
+            self.show_activity_page()
+        elif allow_click and abs(delta_x) < 6:
+            self.toggle_island()
+
+    def wheelEvent(self, event):
+        horizontal = event.pixelDelta().x() or event.angleDelta().x()
+        if horizontal <= -20:
+            self.show_default_page()
+            event.accept()
+            return
+        if horizontal >= 20:
+            self.show_activity_page()
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def title_mousePressEvent(self, event):
+        self._begin_page_swipe(event)
 
     def title_mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and hasattr(self, "_title_press_pos"):
-            if (event.globalPosition().toPoint() - self._title_press_pos).manhattanLength() < 6:
-                self.toggle_island()
+        self._finish_page_swipe(event, allow_click=True)
+
+    def feature_mousePressEvent(self, event):
+        self._begin_page_swipe(event)
+
+    def feature_mouseReleaseEvent(self, event):
+        self._finish_page_swipe(event)
 
     def toggle_mic(self):
         self.expand_island()
@@ -3392,6 +3522,11 @@ class JarvisWidget(QWidget):
                 self.status_label.setToolTip(self._assistant_subtitle)
             if self._assistant_state == "Idle" and not self._call_context:
                 self._collapse_timer.start(1800)
+        if self._default_page_override:
+            if self._is_default_activity():
+                self._default_page_override = False
+            self._sync_compact_surface()
+            return
         if playing_now and not was_playing:
             if self.is_expanded and self._expanded_view == "feature":
                 # A play action inside the expanded player must update it in
