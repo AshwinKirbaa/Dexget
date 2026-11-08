@@ -649,9 +649,9 @@ class JarvisWidget(QWidget):
     macro_stop_requested = pyqtSignal()
     HIDDEN_SIZE = QSize(120, 4)
     MINIMIZE_SIZE = QSize(120, 32)
-    # The idle surface contains only network, clock and battery status. Keep
-    # it tight instead of reserving the wider legacy identity/close controls.
-    COLLAPSED_SIZE = QSize(230, 38)
+    # The idle surface is a physical-laptop-style notch containing only the
+    # clock and battery.  Its top edge is flush with the display bezel.
+    COLLAPSED_SIZE = QSize(178, 34)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)
@@ -1014,7 +1014,6 @@ class JarvisWidget(QWidget):
         default_status_layout = QHBoxLayout(self.default_status_widget)
         default_status_layout.setContentsMargins(0, 0, 0, 0)
         default_status_layout.setSpacing(4)
-        self.default_network_indicator = WifiStatusIndicator()
         self.default_clock_label = QLabel("12:00 AM")
         self.default_battery_indicator = CompactBatteryStatus()
         self.default_clock_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
@@ -1022,7 +1021,6 @@ class JarvisWidget(QWidget):
         self.default_clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.default_clock_label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        default_status_layout.addWidget(self.default_network_indicator)
         default_status_layout.addWidget(self.default_clock_label, 1)
         default_status_layout.addWidget(self.default_battery_indicator)
         self.default_status_widget.hide()
@@ -1664,6 +1662,22 @@ class JarvisWidget(QWidget):
             }
         """)
 
+    def _apply_container_style_for_size(self, size):
+        if size == self.COLLAPSED_SIZE:
+            self.container.setStyleSheet("""
+                #Container {
+                    background-color: rgba(8, 10, 14, 252);
+                    border-top-left-radius: 0px;
+                    border-top-right-radius: 0px;
+                    border-bottom-left-radius: 13px;
+                    border-bottom-right-radius: 13px;
+                    border: 1px solid rgba(255, 255, 255, 42);
+                    border-top: none;
+                }
+            """)
+        else:
+            self._apply_default_container_style()
+
     def _apply_notification_container_style(self):
         self.container.setStyleSheet("""
             #Container {
@@ -1744,15 +1758,6 @@ class JarvisWidget(QWidget):
             return
         from datetime import datetime
         self.default_clock_label.setText(datetime.now().strftime("%I:%M %p").lstrip("0"))
-        connected = False
-        try:
-            import ctypes
-            flags = ctypes.c_ulong()
-            connected = bool(ctypes.windll.wininet.InternetGetConnectedState(
-                ctypes.byref(flags), 0))
-        except Exception:
-            pass
-        self.default_network_indicator.set_connected(connected)
         try:
             import psutil
             battery = psutil.sensors_battery()
@@ -2520,6 +2525,10 @@ class JarvisWidget(QWidget):
         if start_size.width() < 1 or start_size.height() < 1:
             start_size = QSize(size)
 
+        # Select the destination silhouette before the first animation frame,
+        # avoiding a one-frame rounded pill/square flash at the end.
+        self._apply_container_style_for_size(size)
+
         canvas = QSize(max(start_size.width(), size.width()),
                        max(start_size.height(), size.height()))
         self.main_layout.setAlignment(
@@ -2612,11 +2621,30 @@ class JarvisWidget(QWidget):
         """Clip the settled native window to the same curve as its surface."""
         if size.width() <= 0 or size.height() <= 0:
             return
-        radius = min(size.height() / 2.0, 28.0)
         path = QPainterPath()
-        path.addRoundedRect(
-            QRectF(0.0, 0.0, float(size.width()), float(size.height())),
-            radius, radius)
+        if size == self.COLLAPSED_SIZE:
+            # Flat against the display bezel, with the lower corners drawing
+            # inward like a built-in laptop camera notch.
+            width = float(size.width())
+            height = float(size.height())
+            inset = 12.0
+            shoulder = 10.0
+            path.moveTo(0.0, 0.0)
+            path.lineTo(width, 0.0)
+            path.lineTo(width, height - shoulder)
+            path.cubicTo(width, height - 3.0,
+                         width - 5.0, height,
+                         width - inset, height)
+            path.lineTo(inset, height)
+            path.cubicTo(5.0, height,
+                         0.0, height - 3.0,
+                         0.0, height - shoulder)
+            path.closeSubpath()
+        else:
+            radius = min(size.height() / 2.0, 28.0)
+            path.addRoundedRect(
+                QRectF(0.0, 0.0, float(size.width()), float(size.height())),
+                radius, radius)
         self.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
     def _animate_to(self, size, duration=None, curve=QEasingCurve.Type.OutCubic):

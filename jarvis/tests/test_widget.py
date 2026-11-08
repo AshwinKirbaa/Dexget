@@ -156,7 +156,7 @@ def test_dynamic_island_reacts_to_media_metadata():
         assert widget.name_label.text() == "DEXGET"
         assert widget.album_art.isHidden()
         assert widget.previous_btn.isHidden()
-        assert widget._compact_size().width() == 230
+        assert widget._compact_size().width() == 178
     finally:
         widget.media_worker.shutdown()
         widget.media_worker.wait(2000)
@@ -166,7 +166,7 @@ def test_dynamic_island_reacts_to_media_metadata():
         app.processEvents()
 
 
-def test_idle_island_stays_visible_as_rounded_notch():
+def test_idle_island_stays_visible_as_top_mounted_notch():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:
         build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
@@ -178,8 +178,10 @@ def test_idle_island_stays_visible_as_rounded_notch():
         assert widget.windowOpacity() == 1.0
         widget._animation.setCurrentTime(widget._animation.duration())
         app.processEvents()
-        assert widget._corner_radius() == widget.height() / 2
         assert not widget.mask().isEmpty()
+        assert widget.mask().contains(QPoint(1, 1))
+        assert not widget.mask().contains(
+            QPoint(1, widget.COLLAPSED_SIZE.height() - 1))
         assert widget.HOT_ZONE_WIDTH == 140
         assert widget.HOT_ZONE_HEIGHT == 12
         assert widget._hover_timer.interval() == 100
@@ -640,8 +642,9 @@ def test_default_island_expands_without_resource_summary():
         widget._media = {}
         widget._sync_compact_surface()
         widget._update_default_status()
-        assert widget.COLLAPSED_SIZE.width() == 230
-        assert widget.COLLAPSED_SIZE.height() == 38
+        assert widget.COLLAPSED_SIZE.width() == 178
+        assert widget.COLLAPSED_SIZE.height() == 34
+        assert not hasattr(widget, "default_network_indicator")
         assert not widget.default_status_widget.isHidden()
         assert widget.identity_widget.isHidden()
         assert widget.status_dot.isHidden()
