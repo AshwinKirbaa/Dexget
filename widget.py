@@ -3418,10 +3418,11 @@ class JarvisWidget(QWidget):
         self._hide_activity_page_widgets()
         self._sync_compact_surface()
         self._update_default_status()
+        size = self._compact_size()
         if animate:
-            self._animate_to(self.COLLAPSED_SIZE, self.COMPACT_TRANSITION_MS)
+            self._animate_to(size, self.COMPACT_TRANSITION_MS)
         else:
-            self._set_activity_geometry(self.COLLAPSED_SIZE)
+            self._set_activity_geometry(size)
 
     def show_activity_page(self, animate=True):
         """Show the music/call activity page without stopping other activities."""
@@ -3443,8 +3444,11 @@ class JarvisWidget(QWidget):
             self._call_hide_timer.start(4500)
 
     def _cycle_activity_page(self, direction):
+        if (self._page_switch_animation and
+                self._page_switch_animation.state() == QAbstractAnimation.State.Running):
+            return
         now = time.monotonic()
-        if now - self._last_page_switch < 0.12:
+        if now - self._last_page_switch < 0.16:
             return
         self._last_page_switch = now
         pages = ["default"]
@@ -3474,8 +3478,6 @@ class JarvisWidget(QWidget):
         """Slide between independent activity pages like Windows desktops."""
         if target == self._activity_page:
             return
-        if self._page_switch_animation:
-            self._page_switch_animation.stop()
         if self._animation:
             self._animation.stop()
 

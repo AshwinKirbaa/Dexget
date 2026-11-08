@@ -784,6 +784,34 @@ def test_music_and_timer_are_switchable_activity_pages():
         widget.media_worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_activity_switch_cannot_be_interrupted_before_midpoint():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.update_media({"title": "Song", "artist": "Artist", "playing": True})
+        widget.show_default_page(animate=False)
+        assert widget.width() == 390
+        widget._last_page_switch = 0
+        widget._cycle_activity_page(1)
+        first_animation = widget._page_switch_animation
+        first_animation.setCurrentTime(40)
+        widget._last_page_switch = 0
+        widget._cycle_activity_page(-1)
+        assert widget._page_switch_animation is first_animation
+        first_animation.setCurrentTime(first_animation.duration())
+        assert widget._activity_page == "media"
+        assert widget.windowOpacity() == 1.0
+    finally:
+        widget.worker.shutdown()
+        widget.media_worker.shutdown()
+        widget.worker.wait(2000)
+        widget.media_worker.wait(2000)
+        widget.close()
+        app.processEvents()
 def test_interrupted_expand_does_not_reveal_stale_content():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:
