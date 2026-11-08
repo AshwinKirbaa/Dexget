@@ -1715,6 +1715,11 @@ class JarvisWidget(QWidget):
     def _displaying_default_page(self):
         return self._default_page_override or self._is_default_activity()
 
+    def _feature_uses_dashboard(self):
+        """Calls keep useful compact controls but expand into the tool dashboard."""
+        return (self._displaying_default_page() or
+                bool(self._call_context and not self._media))
+
     def _sync_compact_surface(self):
         default = bool((self._default_page_override or
                         (self._activity_page == "default" and self._is_default_activity()))
@@ -2477,7 +2482,7 @@ class JarvisWidget(QWidget):
         # Size from the page the user is viewing, not merely from background
         # activity. A swiped-away media session must not lend its player size
         # to the default dashboard page.
-        if self._displaying_default_page():
+        if self._feature_uses_dashboard():
             return QSize(self.DASHBOARD_EXPANDED_SIZE)
         if self._media:
             title = self._media.get("title") or "Now playing"
@@ -2939,7 +2944,7 @@ class JarvisWidget(QWidget):
         # Contextual activities stay focused on their own controls.  Dexget AI
         # is intentionally available only from the default compact island.
         self.feature_ai_btn.hide()
-        dashboard_mode = self._displaying_default_page()
+        dashboard_mode = self._feature_uses_dashboard()
         media_mode = bool(self._media) and not dashboard_mode
         for widget in (self.feature_eyebrow, self.feature_title,
                        self.feature_detail, self.feature_primary_btn):
@@ -3022,7 +3027,7 @@ class JarvisWidget(QWidget):
     def _show_feature_content(self):
         if self.is_expanded and self._expanded_view == "feature":
             self.title_bar.setVisible(
-                not bool(self._media) and not self._displaying_default_page())
+                not bool(self._media) and not self._feature_uses_dashboard())
             self.feature_panel.show()
 
     def expand_feature(self):
@@ -3041,7 +3046,7 @@ class JarvisWidget(QWidget):
         # The expanded player is a single unified surface; do not stack the
         # compact media pill above it and duplicate artwork/title/controls.
         self.title_bar.setVisible(
-            not bool(self._media) and not self._displaying_default_page())
+            not bool(self._media) and not self._feature_uses_dashboard())
         generation = self._animate_to(
             self._feature_expanded_size(), self.PANEL_TRANSITION_MS)
         QTimer.singleShot(

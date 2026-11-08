@@ -888,6 +888,11 @@ def test_expanded_call_collapses_after_pointer_leaves_but_not_during_input():
         widget._animation.setCurrentTime(widget._animation.duration())
         widget._show_feature_content()
         assert widget.is_expanded
+        assert not widget.dashboard_widget.isHidden()
+        assert widget.feature_eyebrow.isHidden()
+        assert widget.feature_title.isHidden()
+        assert widget.feature_primary_btn.isHidden()
+        assert widget.title_bar.isHidden()
 
         with patch.object(widget, "_pointer_inside_island", return_value=True):
             widget._auto_collapse_expanded()
@@ -927,7 +932,7 @@ def test_activity_page_swipe_preserves_call_and_restores_it():
         app.processEvents()
         assert widget._default_page_override
         assert widget._call_context == "Discord"
-        assert widget._compact_size().width() == 230
+        assert widget._compact_size().width() == 178
         assert not widget.default_status_widget.isHidden()
         assert widget.call_mute_btn.isHidden()
 
