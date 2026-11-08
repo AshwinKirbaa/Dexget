@@ -217,7 +217,7 @@ class WifiStatusIndicator(QWidget):
     def __init__(self):
         super().__init__()
         self.connected = False
-        self.setFixedSize(76, 28)
+        self.setFixedSize(48, 24)
 
     def set_connected(self, connected):
         self.connected = bool(connected)
@@ -249,7 +249,7 @@ class CompactBatteryStatus(QWidget):
         super().__init__()
         self.percent = None
         self.charging = False
-        self.setFixedSize(76, 28)
+        self.setFixedSize(62, 24)
 
     def set_status(self, percent, charging=False):
         self.percent = None if percent is None else max(0, min(100, int(percent)))
@@ -262,26 +262,26 @@ class CompactBatteryStatus(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         outline = QColor("#f5f7fa")
-        body = QRectF(3.0, 8.0, 23.0, 12.0)
+        body = QRectF(1.0, 6.0, 21.0, 12.0)
         painter.setPen(QPen(outline, 1.4))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(body, 3.0, 3.0)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(outline)
-        painter.drawRoundedRect(QRectF(27.0, 11.0, 2.5, 6.0), 1.1, 1.1)
+        painter.drawRoundedRect(QRectF(23.0, 9.0, 2.5, 6.0), 1.1, 1.1)
         if self.percent is not None and self.percent > 0:
             fill_color = QColor("#34c759")
             if self.percent <= 10 and not self.charging:
                 fill_color = QColor("#ff453a")
             elif self.percent <= 20 and not self.charging:
                 fill_color = QColor("#ffd60a")
-            fill_width = max(2.0, 19.0 * self.percent / 100.0)
+            fill_width = max(2.0, 17.0 * self.percent / 100.0)
             painter.setBrush(fill_color)
-            painter.drawRoundedRect(QRectF(5.0, 10.0, fill_width, 8.0), 2.0, 2.0)
+            painter.drawRoundedRect(QRectF(3.0, 8.0, fill_width, 8.0), 2.0, 2.0)
         painter.setPen(outline)
         painter.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         text = "--%" if self.percent is None else f"{self.percent}%"
-        painter.drawText(QRectF(33.0, 0.0, 42.0, 28.0),
+        painter.drawText(QRectF(29.0, 0.0, 33.0, 24.0),
                          Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                          text)
 
@@ -651,7 +651,7 @@ class JarvisWidget(QWidget):
     MINIMIZE_SIZE = QSize(120, 32)
     # The idle surface contains only network, clock and battery status. Keep
     # it tight instead of reserving the wider legacy identity/close controls.
-    COLLAPSED_SIZE = QSize(300, 52)
+    COLLAPSED_SIZE = QSize(230, 38)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)
@@ -1013,11 +1013,11 @@ class JarvisWidget(QWidget):
         self.default_status_widget = QWidget()
         default_status_layout = QHBoxLayout(self.default_status_widget)
         default_status_layout.setContentsMargins(0, 0, 0, 0)
-        default_status_layout.setSpacing(8)
+        default_status_layout.setSpacing(4)
         self.default_network_indicator = WifiStatusIndicator()
         self.default_clock_label = QLabel("12:00 AM")
         self.default_battery_indicator = CompactBatteryStatus()
-        self.default_clock_label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self.default_clock_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         self.default_clock_label.setStyleSheet("color: white;")
         self.default_clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.default_clock_label.setSizePolicy(
@@ -1647,7 +1647,8 @@ class JarvisWidget(QWidget):
         screen = QApplication.primaryScreen() or self.screen()
         area = screen.availableGeometry()
         x = area.x() + (area.width() - size.width()) // 2
-        y = area.y() if size == self.HIDDEN_SIZE else area.y() + self.TOP_MARGIN
+        y = (area.y() if size in (self.HIDDEN_SIZE, self.COLLAPSED_SIZE)
+             else area.y() + self.TOP_MARGIN)
         return QRect(x, y, size.width(), size.height())
 
     @staticmethod
@@ -2433,10 +2434,7 @@ class JarvisWidget(QWidget):
 
     def _compact_size(self):
         if self._displaying_default_page():
-            # Wi-Fi icon, centered clock, battery icon and close affordance
-            # need a stable canvas; deriving this from a hidden/transitioning
-            # widget size hint clips the battery on first reveal.
-            return QSize(330, self.COLLAPSED_SIZE.height())
+            return self.COLLAPSED_SIZE
         if self._notification_active:
             return self.NOTIFICATION_SIZE
         if self._headset_active:
@@ -2728,7 +2726,12 @@ class JarvisWidget(QWidget):
         if self.input_field.hasFocus() and self.input_field.text():
             return
         if self._assistant_state == "Idle" and self._is_default_activity():
-            self.hide_idle_island()
+            self.is_expanded = False
+            self.feature_panel.hide()
+            self.scroll_area.hide()
+            self.input_frame.hide()
+            self.title_bar.show()
+            self._present_compact(self.COLLAPSED_SIZE)
             return
         self.is_expanded = False
         self.title_bar.show()
@@ -2739,6 +2742,21 @@ class JarvisWidget(QWidget):
         self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS)
 
     def hide_idle_island(self):
+        # The idle surface is now a permanent hardware-style notch. Activities
+        # expand from it and return here instead of removing the island.
+        if self._is_default_activity():
+            self._auto_hidden = False
+            self._hover_leave_at = None
+            self.setWindowOpacity(1.0)
+            self.is_expanded = False
+            self.feature_panel.hide()
+            self.scroll_area.hide()
+            self.input_frame.hide()
+            self.title_bar.show()
+            self._sync_compact_surface()
+            if self.size() != self.COLLAPSED_SIZE:
+                self._animate_to(self.COLLAPSED_SIZE, self.COMPACT_TRANSITION_MS)
+            return
         if (self.worker.busy.is_set()
                 or self._call_context
                 or self._timer_active
@@ -2755,56 +2773,38 @@ class JarvisWidget(QWidget):
         self._animate_to(self.HIDDEN_SIZE, self.COMPACT_TRANSITION_MS)
 
     def hide_media_island(self):
-        """Hide the UI without stopping either background worker."""
+        """Return an activity to the permanent idle notch."""
         if self._call_context and not self._media:
             self._refresh_call_layout()
             return
         self._media_manually_hidden = True
-        self._is_hiding = True
-        # Require the pointer to leave and re-enter the hot zone. Otherwise a
-        # minimize click near the top center can instantly reopen the island.
-        self._hot_zone_armed = False
+        self._is_hiding = False
         self.is_expanded = False
+        self._default_page_override = True
+        self._activity_page = "default"
         self.feature_panel.hide()
         self.title_bar.show()
-        self._auto_hidden = True
+        self._auto_hidden = False
         self._hover_leave_at = None
         self.scroll_area.hide()
         self.input_frame.hide()
         self._visibility_generation += 1
-        generation = self._visibility_generation
         self.setWindowOpacity(1.0)
-        # The native window remains stationary; only the center-aligned black
-        # surface contracts. Hide after the surface reaches its pill state.
-        self._animate_surface_to(
-            self.MINIMIZE_SIZE,
-            self.COMPACT_TRANSITION_MS,
-            on_finished=self._complete_media_hide,
-            commit_window=False,
-            start_size=QSize(self.size()),
-            fade_title_bar=True,
-            hide_before_final_frame=True,
-        )
-        # A guarded fallback covers animation-driver interruption (display
-        # sleep, shell restart, or Qt event-loop replacement) without allowing
-        # an old timer to hide a newer, already-visible activity.
-        QTimer.singleShot(
-            self.COMPACT_TRANSITION_MS + 80,
-            lambda: self._complete_media_hide()
-            if (generation == self._visibility_generation and self._auto_hidden)
-            else None,
-        )
+        self.title_bar_opacity.setOpacity(1.0)
+        self._sync_compact_surface()
+        self._animate_to(self.COLLAPSED_SIZE, self.COMPACT_TRANSITION_MS)
 
     def _complete_media_hide(self):
+        # Retained for compatibility with any in-flight animation created by
+        # an older installed build; the current design never hides the notch.
         self._is_hiding = False
-        if self._call_context and not self._media:
-            self._refresh_call_layout()
-            return
-        if self._auto_hidden:
-            self.hide()
-            # Restore while hidden so the next reveal starts fully formed.
-            self.title_bar_opacity.setOpacity(1.0)
-            self._reset_container_constraints()
+        self._auto_hidden = False
+        self.setWindowOpacity(1.0)
+        self.show()
+        self._default_page_override = True
+        self._activity_page = "default"
+        self._sync_compact_surface()
+        self._present_compact(self.COLLAPSED_SIZE)
 
     def _reset_container_constraints(self):
         self.container.setMinimumSize(0, 0)

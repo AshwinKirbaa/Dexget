@@ -94,24 +94,22 @@ def test_dynamic_island_reacts_to_media_metadata():
         starting_geometry = widget.geometry()
         widget.hide_media_island()
         assert widget._media_manually_hidden
-        assert widget._auto_hidden
+        assert not widget._auto_hidden
         minimize_target = widget._animation_target
-        assert minimize_target.size() == widget.MINIMIZE_SIZE
-        assert widget.geometry() == starting_geometry
+        assert minimize_target.size() == widget.COLLAPSED_SIZE
         widget._animation.setCurrentTime(widget._animation.duration() // 2)
-        assert widget.geometry() == starting_geometry
-        assert widget.container.width() < starting_geometry.width()
-        assert widget.title_bar_opacity.opacity() == 0.0
+        assert widget.title_bar_opacity.opacity() == 1.0
         deadline = time.monotonic() + 1
-        while not widget.isHidden() and time.monotonic() < deadline:
+        while widget._animation and widget._animation.state() == widget._animation.State.Running and time.monotonic() < deadline:
             app.processEvents()
             time.sleep(0.01)
-        assert widget.isHidden()
+        assert not widget.isHidden()
+        assert widget.default_status_widget.isVisible()
         assert widget.worker.isRunning()
         assert widget.media_worker.isRunning()
         widget._check_hot_zone()
         assert widget._media_manually_hidden
-        assert widget._auto_hidden
+        assert not widget._auto_hidden
         assert widget.worker.isRunning()
         assert widget.media_worker.isRunning()
 
@@ -132,14 +130,11 @@ def test_dynamic_island_reacts_to_media_metadata():
             "playing": False,
         })
         deadline = time.monotonic() + 1
-        while not widget.isHidden() and time.monotonic() < deadline:
+        while widget._animation and widget._animation.state() == widget._animation.State.Running and time.monotonic() < deadline:
             app.processEvents()
             time.sleep(0.01)
-        assert widget.isHidden()
-        assert widget._media_manually_hidden
-        widget.reveal_idle_island()
         assert not widget.isHidden()
-        assert not widget._media_manually_hidden
+        assert widget.default_status_widget.isVisible()
 
         widget.update_media({
             "title": "One Sun One Moon",
@@ -152,16 +147,16 @@ def test_dynamic_island_reacts_to_media_metadata():
 
         widget.update_media({})
         deadline = time.monotonic() + 1
-        while not widget.isHidden() and time.monotonic() < deadline:
+        while widget._animation and widget._animation.state() == widget._animation.State.Running and time.monotonic() < deadline:
             app.processEvents()
             time.sleep(0.01)
-        assert widget.isHidden()
+        assert not widget.isHidden()
 
         widget.update_media({})
         assert widget.name_label.text() == "DEXGET"
         assert widget.album_art.isHidden()
         assert widget.previous_btn.isHidden()
-        assert widget._compact_size().width() == 330
+        assert widget._compact_size().width() == 230
     finally:
         widget.media_worker.shutdown()
         widget.media_worker.wait(2000)
@@ -171,7 +166,7 @@ def test_dynamic_island_reacts_to_media_metadata():
         app.processEvents()
 
 
-def test_idle_island_hides_and_reveals_with_rounded_mask():
+def test_idle_island_stays_visible_as_rounded_notch():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:
         build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
@@ -179,17 +174,12 @@ def test_idle_island_hides_and_reveals_with_rounded_mask():
     try:
         widget._assistant_state = "Idle"
         widget.hide_idle_island()
-        assert widget._auto_hidden
-        assert widget.windowOpacity() < 0.1
-
-        widget.reveal_idle_island()
         assert not widget._auto_hidden
         assert widget.windowOpacity() == 1.0
-        widget._animation.stop()
-        widget.resize(widget.COLLAPSED_SIZE)
+        widget._animation.setCurrentTime(widget._animation.duration())
         app.processEvents()
         assert widget._corner_radius() == widget.height() / 2
-        assert widget.mask().isEmpty()
+        assert not widget.mask().isEmpty()
         assert widget.HOT_ZONE_WIDTH == 140
         assert widget.HOT_ZONE_HEIGHT == 12
         assert widget._hover_timer.interval() == 100
@@ -650,7 +640,8 @@ def test_default_island_expands_without_resource_summary():
         widget._media = {}
         widget._sync_compact_surface()
         widget._update_default_status()
-        assert widget.COLLAPSED_SIZE.width() == 300
+        assert widget.COLLAPSED_SIZE.width() == 230
+        assert widget.COLLAPSED_SIZE.height() == 38
         assert not widget.default_status_widget.isHidden()
         assert widget.identity_widget.isHidden()
         assert widget.status_dot.isHidden()
@@ -842,7 +833,7 @@ def test_activity_switch_cannot_be_interrupted_before_midpoint():
     try:
         widget.update_media({"title": "Song", "artist": "Artist", "playing": True})
         widget.show_default_page(animate=False)
-        assert widget.width() == 330
+        assert widget.width() == 230
         widget._last_page_switch = 0
         widget._cycle_activity_page(1)
         first_animation = widget._page_switch_animation
@@ -933,7 +924,7 @@ def test_activity_page_swipe_preserves_call_and_restores_it():
         app.processEvents()
         assert widget._default_page_override
         assert widget._call_context == "Discord"
-        assert widget._compact_size().width() == 330
+        assert widget._compact_size().width() == 230
         assert not widget.default_status_widget.isHidden()
         assert widget.call_mute_btn.isHidden()
 
