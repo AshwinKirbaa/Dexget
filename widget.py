@@ -1986,7 +1986,7 @@ class JarvisWidget(QWidget):
             # Wi-Fi icon, centered clock, battery icon and close affordance
             # need a stable canvas; deriving this from a hidden/transitioning
             # widget size hint clips the battery on first reveal.
-            return QSize(390, self.COLLAPSED_SIZE.height())
+            return QSize(330, self.COLLAPSED_SIZE.height())
         if self._notification_active:
             return self.NOTIFICATION_SIZE
         if self._headset_active:
