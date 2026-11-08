@@ -700,6 +700,12 @@ def test_dashboard_launcher_dispatches_without_agent_or_model():
             "kind": "shortcut", "label": "Save", "payload": "ctrl+s"})
         assert "Save" in button.text()
         assert button.toolTip() == "ctrl+s"
+        assert not button.icon().isNull()
+        widget._set_launcher_edit_mode(True)
+        assert widget.dashboard_launcher_edit.text() == "Done"
+        assert button.text().startswith("×")
+        widget._set_launcher_edit_mode(False)
+        assert button.text() == "Save"
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()

@@ -6,15 +6,17 @@ import time
 import os
 import glob
 import json
+import shutil
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                         QFrame, QSizePolicy, QGraphicsDropShadowEffect, QInputDialog,
                              QGraphicsOpacityEffect, QSlider, QGridLayout,
-                             QStackedWidget, QSystemTrayIcon, QMenu)
+                             QStackedWidget, QSystemTrayIcon, QMenu,
+                             QFileIconProvider, QStyle)
 from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QParallelAnimationGroup, QVariantAnimation,
-                          QRectF, QAbstractAnimation, QSettings, QEvent)
+                          QRectF, QAbstractAnimation, QSettings, QEvent, QFileInfo)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap, QAction)
 
@@ -1297,9 +1299,11 @@ class JarvisWidget(QWidget):
         launcher_title.setStyleSheet("font-size:15px; font-weight:700;")
         launcher_header.addWidget(launcher_title)
         launcher_header.addStretch()
-        clear_launchers = QPushButton("Reset custom")
-        clear_launchers.clicked.connect(self._reset_dashboard_launchers)
-        launcher_header.addWidget(clear_launchers)
+        self.dashboard_launcher_edit = QPushButton("Edit")
+        self.dashboard_launcher_edit.setCheckable(True)
+        self.dashboard_launcher_edit.setToolTip("Edit or remove launcher buttons")
+        self.dashboard_launcher_edit.toggled.connect(self._set_launcher_edit_mode)
+        launcher_header.addWidget(self.dashboard_launcher_edit)
         launcher_layout.addLayout(launcher_header)
         self.dashboard_launcher_rows = {}
         for kind, title, add_handler in (
@@ -1960,16 +1964,23 @@ class JarvisWidget(QWidget):
         """Populate the home page with fast, user-configurable launch actions."""
         self.dashboard_launcher_buttons = []
         self.dashboard_custom_launchers = []
+        self._dashboard_launcher_editing = False
+        settings = QSettings("Dexget", "DynamicIsland")
+        hidden_raw = settings.value("dashboard/hidden_default_launchers", "") or ""
+        try:
+            self.dashboard_hidden_default_launchers = set(json.loads(str(hidden_raw)))
+        except (TypeError, ValueError):
+            self.dashboard_hidden_default_launchers = set()
         defaults = (
             {"kind": "application", "label": "Explorer", "payload": "explorer.exe"},
             {"kind": "application", "label": "Terminal", "payload": "wt.exe"},
             {"kind": "application", "label": "Settings", "payload": "ms-settings:"},
         )
         for entry in defaults:
-            self._add_launcher_button(entry, custom=False)
+            if entry["payload"] not in self.dashboard_hidden_default_launchers:
+                self._add_launcher_button(entry, custom=False)
 
-        raw_value = QSettings("Dexget", "DynamicIsland").value(
-            "dashboard/launchers", "") or ""
+        raw_value = settings.value("dashboard/launchers", "") or ""
         try:
             stored = json.loads(str(raw_value)) if raw_value else []
         except (TypeError, ValueError):
@@ -1988,21 +1999,86 @@ class JarvisWidget(QWidget):
     def _add_launcher_button(self, entry, custom=True):
         kind = entry["kind"]
         row = self.dashboard_launcher_rows[kind]
-        icons = {"application": "▣", "script": "⚡", "shortcut": "⌨"}
-        button = QPushButton(f"{icons[kind]}  {entry['label']}")
+        button = QPushButton(entry["label"])
+        button.setIcon(self._dashboard_launcher_icon(entry))
+        button.setIconSize(QSize(22, 22))
         button.setToolTip(entry["payload"])
         button.setProperty("launcherKind", kind)
         button.setProperty("launcherCustom", bool(custom))
+        button.setProperty("launcherEntry", json.dumps(entry, ensure_ascii=False))
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setStyleSheet(
             "QPushButton { background:#1b1b1f; border:1px solid #303037; "
-            "border-radius:9px; padding:6px 11px; font-size:12px; } "
+            "border-radius:10px; padding:5px 10px; font-size:12px; "
+            "text-align:left; } "
             "QPushButton:hover { background:#27272d; border-color:#4a4a54; }")
         button.clicked.connect(
-            lambda checked=False, value=dict(entry): self._run_dashboard_launcher(value))
+            lambda checked=False, item=button: self._activate_dashboard_launcher(item))
         # Keep custom actions before the flexible spacer and the add button.
         row.insertWidget(max(1, row.count() - 2), button)
         self.dashboard_launcher_buttons.append(button)
         return button
+
+    def _dashboard_launcher_icon(self, entry):
+        kind = entry.get("kind")
+        payload = str(entry.get("payload", "")).strip()
+        provider = QFileIconProvider()
+        if kind in {"application", "script"}:
+            candidate = payload
+            if kind == "script" and not os.path.isfile(candidate):
+                candidate = "powershell.exe"
+            resolved = candidate if os.path.exists(candidate) else shutil.which(candidate)
+            if resolved:
+                icon = provider.icon(QFileInfo(resolved))
+                if not icon.isNull():
+                    return icon
+        if kind == "application" and payload.startswith("ms-settings:"):
+            return QApplication.style().standardIcon(
+                QStyle.StandardPixmap.SP_ComputerIcon)
+        if kind == "shortcut":
+            return QApplication.style().standardIcon(
+                QStyle.StandardPixmap.SP_ArrowRight)
+        return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+    def _activate_dashboard_launcher(self, button):
+        try:
+            entry = json.loads(str(button.property("launcherEntry")))
+        except (TypeError, ValueError):
+            return
+        if self._dashboard_launcher_editing:
+            self._remove_dashboard_launcher(button, entry)
+        else:
+            self._run_dashboard_launcher(entry)
+
+    def _set_launcher_edit_mode(self, enabled):
+        self._dashboard_launcher_editing = bool(enabled)
+        self.dashboard_launcher_edit.setText("Done" if enabled else "Edit")
+        for button in self.dashboard_launcher_buttons:
+            label = json.loads(str(button.property("launcherEntry"))).get("label", "")
+            button.setText(f"×  {label}" if enabled else label)
+            button.setToolTip(
+                "Click to remove" if enabled
+                else json.loads(str(button.property("launcherEntry"))).get("payload", ""))
+        self._keep_feature_open()
+
+    def _remove_dashboard_launcher(self, button, entry):
+        if button not in self.dashboard_launcher_buttons:
+            return
+        self.dashboard_launcher_buttons.remove(button)
+        if button.property("launcherCustom"):
+            self.dashboard_custom_launchers = [
+                item for item in self.dashboard_custom_launchers
+                if not (item.get("kind") == entry.get("kind")
+                        and item.get("label") == entry.get("label")
+                        and item.get("payload") == entry.get("payload"))]
+            self._save_dashboard_launchers()
+        else:
+            self.dashboard_hidden_default_launchers.add(entry.get("payload", ""))
+            QSettings("Dexget", "DynamicIsland").setValue(
+                "dashboard/hidden_default_launchers",
+                json.dumps(sorted(self.dashboard_hidden_default_launchers)))
+        button.deleteLater()
+        self._keep_feature_open()
 
     def _save_dashboard_launchers(self):
         QSettings("Dexget", "DynamicIsland").setValue(
@@ -2068,15 +2144,6 @@ class JarvisWidget(QWidget):
                 QTimer.singleShot(180, lambda: keyboard_hotkey(payload))
         except Exception as exc:
             self._append_message(f"Could not run {entry.get('label', 'launcher')}: {exc}")
-        self._keep_feature_open()
-
-    def _reset_dashboard_launchers(self):
-        self.dashboard_custom_launchers = []
-        QSettings("Dexget", "DynamicIsland").remove("dashboard/launchers")
-        for button in list(self.dashboard_launcher_buttons):
-            if button.property("launcherCustom"):
-                self.dashboard_launcher_buttons.remove(button)
-                button.deleteLater()
         self._keep_feature_open()
 
     def _pin_current_clipboard(self):
