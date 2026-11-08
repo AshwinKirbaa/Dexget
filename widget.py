@@ -23,6 +23,49 @@ from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
 import jarvis_integration
 
 
+class MacroPlaybackWorker(QThread):
+    """Replay a recorded mouse/keyboard sequence without starting the model."""
+    playback_finished = pyqtSignal(bool, str)
+
+    def __init__(self, actions):
+        super().__init__()
+        self.actions = list(actions)
+        self._cancelled = threading.Event()
+
+    def cancel(self):
+        self._cancelled.set()
+
+    def run(self):
+        try:
+            import pyautogui
+            pyautogui.FAILSAFE = True
+            for action in self.actions:
+                if self._cancelled.is_set():
+                    self.playback_finished.emit(False, "Automation cancelled")
+                    return
+                delay = max(0.0, min(float(action.get("delay", 0.0)), 60.0))
+                if self._cancelled.wait(delay):
+                    self.playback_finished.emit(False, "Automation cancelled")
+                    return
+                kind = action.get("type")
+                if kind == "mouse_down":
+                    pyautogui.mouseDown(
+                        int(action["x"]), int(action["y"]), button=action["button"])
+                elif kind == "mouse_up":
+                    pyautogui.mouseUp(
+                        int(action["x"]), int(action["y"]), button=action["button"])
+                elif kind == "scroll":
+                    pyautogui.moveTo(int(action["x"]), int(action["y"]))
+                    pyautogui.scroll(int(action["dy"]))
+                elif kind == "key_down":
+                    pyautogui.keyDown(action["key"])
+                elif kind == "key_up":
+                    pyautogui.keyUp(action["key"])
+            self.playback_finished.emit(True, "Automation completed")
+        except Exception as exc:
+            self.playback_finished.emit(False, f"Automation stopped: {exc}")
+
+
 class MediaControlButton(QPushButton):
     """Font-independent Apple-style previous/play-pause/next control."""
     def __init__(self, kind):
@@ -603,6 +646,7 @@ class DashboardSystemWorker(QThread):
         self.info_ready.emit(data)
 
 class JarvisWidget(QWidget):
+    macro_stop_requested = pyqtSignal()
     HIDDEN_SIZE = QSize(120, 4)
     MINIMIZE_SIZE = QSize(120, 32)
     # The idle surface contains only network, clock and battery status. Keep
@@ -631,6 +675,14 @@ class JarvisWidget(QWidget):
 
     def __init__(self):
         super().__init__()
+        self._macro_recording = False
+        self._macro_actions = []
+        self._macro_label = ""
+        self._macro_last_event = 0.0
+        self._macro_mouse_listener = None
+        self._macro_keyboard_listener = None
+        self._macro_playback = None
+        self.macro_stop_requested.connect(self._finish_macro_recording)
         self.is_expanded = False
         self._expanded_view = "feature"
         self._feature_action = None
@@ -1976,15 +2028,6 @@ class JarvisWidget(QWidget):
             {"kind": "application", "label": "Explorer", "payload": "explorer.exe"},
             {"kind": "application", "label": "Terminal", "payload": "wt.exe"},
             {"kind": "application", "label": "Settings", "payload": "ms-settings:"},
-            {
-                "kind": "automation",
-                "label": "Join Hangout + Camera",
-                "payload": (
-                    "Open the installed Discord desktop app. Navigate to the Hangout "
-                    "voice channel in the currently selected server, join the voice call, "
-                    "wait until the connection is established, and then turn on my camera. "
-                    "Verify that both the call and camera are active."),
-            },
         )
         for entry in defaults:
             if entry["payload"] not in self.dashboard_hidden_default_launchers:
@@ -2130,8 +2173,161 @@ class JarvisWidget(QWidget):
             "shortcut", "Keyboard shortcut (example: ctrl+shift+s):")
 
     def _add_dashboard_automation(self):
-        self._prompt_dashboard_launcher(
-            "automation", "Describe every step the automation should perform:")
+        label, accepted = QInputDialog.getText(
+            self, "Record automation", "Automation name:")
+        if not accepted or not label.strip():
+            return
+        self._macro_label = label.strip()[:32]
+        self.dashboard_launcher_edit.setChecked(False)
+        self._auto_collapse_feature()
+        self.tray_icon.showMessage(
+            "Recording starts now",
+            "Perform the task normally. Press F8 when finished.",
+            QSystemTrayIcon.MessageIcon.Information,
+            5000,
+        )
+        QTimer.singleShot(450, self._start_macro_recording)
+
+    @staticmethod
+    def _macro_key_name(key):
+        try:
+            if key.char is not None:
+                return key.char
+        except AttributeError:
+            pass
+        name = getattr(key, "name", None)
+        if name:
+            aliases = {
+                "ctrl_l": "ctrl", "ctrl_r": "ctrl",
+                "shift_l": "shift", "shift_r": "shift",
+                "alt_l": "alt", "alt_r": "alt",
+                "cmd": "win", "cmd_l": "win", "cmd_r": "win",
+                "page_up": "pgup", "page_down": "pgdn",
+            }
+            return aliases.get(name, name)
+        return None
+
+    def _record_macro_action(self, action):
+        if not self._macro_recording:
+            return
+        now = time.monotonic()
+        action["delay"] = round(max(0.0, now - self._macro_last_event), 3)
+        self._macro_last_event = now
+        self._macro_actions.append(action)
+
+    def _start_macro_recording(self):
+        if self._macro_recording or not self._macro_label:
+            return
+        try:
+            from pynput import mouse, keyboard
+        except Exception as exc:
+            self.add_message("Assistant", f"Input recorder is unavailable: {exc}")
+            return
+        self._macro_actions = []
+        self._macro_recording = True
+        self._macro_last_event = time.monotonic()
+
+        def on_click(x, y, button, pressed):
+            self._record_macro_action({
+                "type": "mouse_down" if pressed else "mouse_up",
+                "x": int(x), "y": int(y),
+                "button": getattr(button, "name", "left"),
+            })
+
+        def on_scroll(x, y, dx, dy):
+            self._record_macro_action({
+                "type": "scroll", "x": int(x), "y": int(y), "dy": int(dy)})
+
+        def on_press(key):
+            if key == keyboard.Key.f8:
+                self.macro_stop_requested.emit()
+                return False
+            name = self._macro_key_name(key)
+            if name:
+                self._record_macro_action({"type": "key_down", "key": name})
+
+        def on_release(key):
+            if key == keyboard.Key.f8:
+                return False
+            name = self._macro_key_name(key)
+            if name:
+                self._record_macro_action({"type": "key_up", "key": name})
+
+        self._macro_mouse_listener = mouse.Listener(
+            on_click=on_click, on_scroll=on_scroll)
+        self._macro_keyboard_listener = keyboard.Listener(
+            on_press=on_press, on_release=on_release)
+        self._macro_mouse_listener.start()
+        self._macro_keyboard_listener.start()
+        self._set_macro_tray_action(True, "Stop recording (F8)")
+
+    def _finish_macro_recording(self):
+        if not self._macro_recording:
+            return
+        self._macro_recording = False
+        for listener in (self._macro_mouse_listener, self._macro_keyboard_listener):
+            if listener:
+                listener.stop()
+        self._macro_mouse_listener = None
+        self._macro_keyboard_listener = None
+        self._set_macro_tray_action(False)
+        actions = list(self._macro_actions)
+        label = self._macro_label
+        self._macro_label = ""
+        if not actions:
+            self.tray_icon.showMessage(
+                "Recording discarded", "No actions were captured.",
+                QSystemTrayIcon.MessageIcon.Warning, 3000)
+            return
+        entry = {
+            "kind": "automation", "label": label,
+            "payload": json.dumps({"version": 1, "actions": actions}, separators=(",", ":")),
+        }
+        self.dashboard_custom_launchers.append(entry)
+        self._add_launcher_button(entry, custom=True)
+        self._save_dashboard_launchers()
+        self.tray_icon.showMessage(
+            "Automation saved", f"{label} captured {len(actions)} actions.",
+            QSystemTrayIcon.MessageIcon.Information, 4000)
+
+    def _set_macro_tray_action(self, visible, text="Stop automation"):
+        if not hasattr(self, "tray_macro_stop_action"):
+            return
+        self.tray_macro_stop_action.setText(text)
+        self.tray_macro_stop_action.setVisible(bool(visible))
+
+    def _stop_macro_activity(self):
+        if self._macro_recording:
+            self._finish_macro_recording()
+        if self._macro_playback and self._macro_playback.isRunning():
+            self._macro_playback.cancel()
+
+    def _play_recorded_automation(self, entry, recording):
+        actions = recording.get("actions", []) if isinstance(recording, dict) else []
+        if not actions:
+            self.add_message("Assistant", "This automation has no recorded actions.")
+            return
+        if self._macro_playback and self._macro_playback.isRunning():
+            self.add_message("Assistant", "Another recorded automation is already running.")
+            return
+        self._auto_collapse_feature()
+        self._macro_playback = MacroPlaybackWorker(actions)
+        self._macro_playback.playback_finished.connect(self._macro_playback_finished)
+        self._set_macro_tray_action(True, "Stop automation playback")
+        self._macro_playback.start()
+        self.tray_icon.showMessage(
+            "Automation running", str(entry.get("label", "Recorded automation")),
+            QSystemTrayIcon.MessageIcon.Information, 2500)
+
+    def _macro_playback_finished(self, success, message):
+        self._set_macro_tray_action(False)
+        self.tray_icon.showMessage(
+            "Automation complete" if success else "Automation stopped",
+            message,
+            (QSystemTrayIcon.MessageIcon.Information if success
+             else QSystemTrayIcon.MessageIcon.Warning),
+            3000,
+        )
 
     def _run_dashboard_launcher(self, entry):
         kind = entry.get("kind")
@@ -2160,10 +2356,15 @@ class JarvisWidget(QWidget):
                 self.collapse_island()
                 QTimer.singleShot(180, lambda: keyboard_hotkey(payload))
             elif kind == "automation":
-                accepted = self.worker.submit_text(
-                    payload, display_text=str(entry.get("label", "Run automation")))
-                if not accepted:
-                    self.add_message("Assistant", "Dexget is already working on another task.")
+                try:
+                    recording = json.loads(payload)
+                except (TypeError, ValueError):
+                    self.add_message(
+                        "Assistant",
+                        "This is an older model-based automation. Remove it in Edit mode "
+                        "and record it again.")
+                    return
+                self._play_recorded_automation(entry, recording)
         except Exception as exc:
             self.add_message(
                 "Assistant", f"Could not run {entry.get('label', 'launcher')}: {exc}")
@@ -4034,6 +4235,10 @@ class JarvisWidget(QWidget):
         self.tray_open_action = QAction("Open Dynamic Island", self)
         self.tray_open_action.triggered.connect(self.activate_island)
         self.tray_menu.addAction(self.tray_open_action)
+        self.tray_macro_stop_action = QAction("Stop automation", self)
+        self.tray_macro_stop_action.triggered.connect(self._stop_macro_activity)
+        self.tray_macro_stop_action.setVisible(False)
+        self.tray_menu.addAction(self.tray_macro_stop_action)
         self.tray_menu.addSeparator()
         self.tray_force_close_action = QAction("Force close Dexget", self)
         self.tray_force_close_action.triggered.connect(self.force_close)
@@ -4055,6 +4260,7 @@ class JarvisWidget(QWidget):
         """Terminate the background service from the explicit tray command."""
         if getattr(self, "_force_closing", False):
             return
+        self._stop_macro_activity()
         self._force_closing = True
         self._closing = True
         if hasattr(self, "tray_icon"):
