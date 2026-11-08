@@ -669,6 +669,37 @@ def test_default_island_expands_without_resource_summary():
         assert widget.dashboard_stats_card.isHidden()
         assert not widget.dashboard_nav_buttons["home"].isHidden()
         assert widget.dashboard_stack.currentWidget() is widget.dashboard_pages["home"]
+        launcher_labels = [button.text() for button in widget.dashboard_launcher_buttons]
+        assert any("Explorer" in label for label in launcher_labels)
+        assert any("Terminal" in label for label in launcher_labels)
+        assert any("Settings" in label for label in launcher_labels)
+        assert set(widget.dashboard_launcher_rows) == {
+            "application", "script", "shortcut"}
+    finally:
+        widget.worker.shutdown()
+        widget.media_worker.shutdown()
+        widget.worker.wait(2000)
+        widget.media_worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
+def test_dashboard_launcher_dispatches_without_agent_or_model():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        with patch.object(widget, "_launch_program") as launch:
+            widget._run_dashboard_launcher({
+                "kind": "application", "label": "Editor", "payload": "notepad.exe"})
+            launch.assert_called_once_with("notepad.exe")
+        button = widget._add_launcher_button({
+            "kind": "shortcut", "label": "Save", "payload": "ctrl+s"})
+        assert "Save" in button.text()
+        assert button.toolTip() == "ctrl+s"
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()
