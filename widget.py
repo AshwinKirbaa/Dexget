@@ -1995,7 +1995,7 @@ class JarvisWidget(QWidget):
             return self.LOW_POWER_SIZE
         if self._charging_active:
             return self.CHARGING_SIZE
-        if self._timer_active:
+        if self._timer_active and self._activity_page == "timer":
             return self.TIMER_SIZE
         if self._call_context and not self._media:
             return self.CALL_SIZE
