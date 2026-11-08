@@ -1669,8 +1669,8 @@ class JarvisWidget(QWidget):
                     background-color: rgba(8, 10, 14, 252);
                     border-top-left-radius: 0px;
                     border-top-right-radius: 0px;
-                    border-bottom-left-radius: 13px;
-                    border-bottom-right-radius: 13px;
+                    border-bottom-left-radius: 17px;
+                    border-bottom-right-radius: 17px;
                     border: 1px solid rgba(255, 255, 255, 42);
                     border-top: none;
                 }
@@ -1728,6 +1728,11 @@ class JarvisWidget(QWidget):
         timer_visible = bool(self._activity_page == "timer" and self._timer_active and not any((
             self._notification_active, self._headset_active,
             self._low_power_active, self._charging_active)))
+        # Match the title layer to the physical notch height. Otherwise Qt
+        # centres this row in its normal 48 px bar and the 34 px notch clips
+        # the top, leaving the clock and battery visibly too low.
+        self.title_bar.setFixedHeight(
+            self.COLLAPSED_SIZE.height() if default else 48)
         self.default_status_widget.setVisible(default)
         self.timer_status_widget.setVisible(timer_visible)
         if timer_visible:
@@ -2632,17 +2637,17 @@ class JarvisWidget(QWidget):
             # inward like a built-in laptop camera notch.
             width = float(size.width())
             height = float(size.height())
-            inset = 12.0
-            shoulder = 10.0
+            inset = 18.0
+            shoulder = 17.0
             path.moveTo(0.0, 0.0)
             path.lineTo(width, 0.0)
             path.lineTo(width, height - shoulder)
-            path.cubicTo(width, height - 3.0,
-                         width - 5.0, height,
+            path.cubicTo(width, height - 5.0,
+                         width - 8.0, height,
                          width - inset, height)
             path.lineTo(inset, height)
-            path.cubicTo(5.0, height,
-                         0.0, height - 3.0,
+            path.cubicTo(8.0, height,
+                         0.0, height - 5.0,
                          0.0, height - shoulder)
             path.closeSubpath()
         else:

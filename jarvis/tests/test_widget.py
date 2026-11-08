@@ -646,6 +646,7 @@ def test_default_island_expands_without_resource_summary():
         assert widget.COLLAPSED_SIZE.height() == 34
         assert not hasattr(widget, "default_network_indicator")
         assert not widget.default_status_widget.isHidden()
+        assert widget.title_bar.height() == widget.COLLAPSED_SIZE.height()
         assert widget.identity_widget.isHidden()
         assert widget.status_dot.isHidden()
         assert widget.screen_assist_btn.isHidden()
