@@ -465,52 +465,15 @@ def test_call_layout_is_contextual_and_controls_microphone():
         assert widget.call_mute_btn.isHidden()
         assert not widget.screen_assist_btn.isHidden()
 
-        # A background Discord capability record must not claim the island
-        # unless Discord was the foreground app when live use began.
-        widget._foreground_title = "Codex"
-        widget._foreground_process = "codex.exe"
+        # Discord is intentionally excluded from contextual call controls,
+        # even when it owns the microphone and is the foreground app.
+        widget._foreground_title = "Friends - Discord"
+        widget._foreground_process = "Discord.exe"
         with patch.object(widget, "_active_microphone_clients",
                           return_value={r"microphone\\nonpackaged\\discord.exe"}):
             widget._check_call_context()
         assert widget._call_context is None
         assert widget.call_mute_btn.isHidden()
-
-        widget._foreground_title = "Friends - Discord"
-        widget._foreground_process = "Discord.exe"
-        with patch.object(widget, "_active_microphone_clients",
-                          return_value={r"microphone\\nonpackaged\\discord.exe"}), \
-                patch.object(widget, "_discord_rtc_connected", return_value=False):
-            widget._check_call_context()
-        assert widget._call_context is None
-
-        with patch.object(widget, "_active_microphone_clients",
-                          return_value={r"microphone\\nonpackaged\\discord.exe"}), \
-                patch.object(widget, "_discord_rtc_connected", return_value=True):
-            widget._check_call_context()
-        assert widget._call_context == "Discord"
-        assert widget.name_label.text() == "Discord Call"
-        assert not widget.call_mute_btn.isHidden()
-        assert not widget._auto_hidden
-        assert widget._call_hide_timer.isActive()
-
-        widget.hide_call_island()
-        widget._animation.setCurrentTime(widget._animation.duration())
-        app.processEvents()
-        assert widget.isHidden()
-        assert widget._call_context == "Discord"
-
-        widget.reveal_idle_island()
-        app.processEvents()
-        assert not widget.isHidden()
-        assert widget._call_hide_timer.isActive()
-
-        # A transient microphone ownership gap must not hide an established
-        # call activity; the third consecutive miss ends it.
-        with patch.object(widget, "_active_microphone_clients", return_value=set()):
-            widget._check_call_context()
-            widget._check_call_context()
-        assert widget._call_context == "Discord"
-        assert not widget.isHidden()
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()
@@ -883,7 +846,7 @@ def test_expanded_call_collapses_after_pointer_leaves_but_not_during_input():
         build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
         widget = JarvisWidget()
     try:
-        widget._call_context = "Discord"
+        widget._call_context = "Google Meet"
         widget._refresh_call_layout()
         widget.expand_feature()
         widget._animation.setCurrentTime(widget._animation.duration())
@@ -925,14 +888,14 @@ def test_activity_page_swipe_preserves_call_and_restores_it():
         build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
         widget = JarvisWidget()
     try:
-        widget._call_context = "Discord"
+        widget._call_context = "Google Meet"
         widget._refresh_call_layout()
         assert not widget.call_mute_btn.isHidden()
 
         widget.show_default_page()
         app.processEvents()
         assert widget._default_page_override
-        assert widget._call_context == "Discord"
+        assert widget._call_context == "Google Meet"
         assert widget._compact_size().width() == 178
         assert not widget.default_status_widget.isHidden()
         assert widget.call_mute_btn.isHidden()
@@ -945,7 +908,7 @@ def test_activity_page_swipe_preserves_call_and_restores_it():
         widget.show_activity_page()
         app.processEvents()
         assert not widget._default_page_override
-        assert widget._call_context == "Discord"
+        assert widget._call_context == "Google Meet"
         assert widget._compact_size() == widget.CALL_SIZE
         assert not widget.call_mute_btn.isHidden()
     finally:

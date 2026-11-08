@@ -4,7 +4,6 @@ import queue
 import asyncio
 import time
 import os
-import glob
 import json
 import shutil
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
@@ -720,9 +719,6 @@ class JarvisWidget(QWidget):
         self._timer_remaining = 0.0
         self._timer_deadline = None
         self._timer_generation = 0
-        self._discord_log_path = None
-        self._discord_log_offset = 0
-        self._discord_rtc_active = False
         self._default_page_override = False
         self._activity_page = "default"
         self._swipe_start_pos = None
@@ -3267,7 +3263,7 @@ class JarvisWidget(QWidget):
                     stop = 0
                 # Windows documents LastUsedTimeStop == 0 as the live-use
                 # marker. Comparing start/stop timestamps also catches stale
-                # history left by apps such as Discord after a call ends.
+                # history left by communication apps after a call ends.
                 if start > 0 and stop == 0:
                     active.add(path.lower())
             except (OSError, TypeError, ValueError):
@@ -3298,7 +3294,6 @@ class JarvisWidget(QWidget):
         title = self._foreground_title.lower()
         process = self._foreground_process.lower()
         candidates = (
-            ("Discord", ("discord",)),
             ("WhatsApp", ("whatsapp",)),
             ("Microsoft Teams", ("ms-teams", "msteams", "teams.exe")),
             ("Zoom", ("zoom",)),
@@ -3308,11 +3303,6 @@ class JarvisWidget(QWidget):
             label for label, tokens in candidates
             if any(token in clients for token in tokens)
         }
-        # Discord initializes microphone capture while merely sitting on its
-        # Friends page. Require its WebRTC transport to have actually reached
-        # RTC_CONNECTED before treating that capture as a call.
-        if "Discord" in active_labels and not self._discord_rtc_connected():
-            active_labels.discard("Discord")
         # Once a call has been positively identified, keep its controls while
         # the same app retains live microphone access even if the user changes
         # windows. Initial activation is stricter and must match the foreground
@@ -3331,50 +3321,13 @@ class JarvisWidget(QWidget):
                 return label
         return None
 
-    def _discord_rtc_connected(self):
-        """Track Discord's current WebRTC connection from its append-only log."""
-        try:
-            appdata = os.environ.get("APPDATA", "")
-            files = glob.glob(os.path.join(
-                appdata, "discord", "logs", "discord-webrtc*"))
-            # Exclude rotated "discord-last-*" logs; they describe a previous
-            # Discord process and otherwise resurrect an old call state.
-            files = [path for path in files
-                     if not os.path.basename(path).startswith("discord-last-")]
-            if not files:
-                self._discord_rtc_active = False
-                return False
-            path = max(files, key=os.path.getmtime)
-            size = os.path.getsize(path)
-            if path != self._discord_log_path or size < self._discord_log_offset:
-                self._discord_log_path = path
-                self._discord_log_offset = 0
-                self._discord_rtc_active = False
-            with open(path, "rb") as stream:
-                stream.seek(self._discord_log_offset)
-                chunk = stream.read()
-                self._discord_log_offset = stream.tell()
-            text = chunk.decode("utf-8", errors="ignore").lower()
-            for line in text.splitlines():
-                if ("=> rtc_connected" in line
-                        or "=> connected" in line and "rtc media connection" in line):
-                    self._discord_rtc_active = True
-                elif any(marker in line for marker in (
-                        "=> rtc_disconnected", "=> disconnected",
-                        "disconnecting from rtc", "rtc connection destroyed")):
-                    self._discord_rtc_active = False
-            return self._discord_rtc_active
-        except (OSError, ValueError):
-            self._discord_rtc_active = False
-            return False
-
     def _check_call_context(self):
         application = self._detect_call_application()
         if application:
             self._call_miss_count = 0
         elif self._call_context:
             # CapabilityAccessManager may briefly drop microphone ownership
-            # between Discord/WebRTC capture transitions. Require three
+            # between audio-capture transitions. Require three
             # consecutive misses before ending an established call activity.
             self._call_miss_count += 1
             if self._call_miss_count < 3:
