@@ -673,8 +673,9 @@ def test_default_island_expands_without_resource_summary():
         assert any("Explorer" in label for label in launcher_labels)
         assert any("Terminal" in label for label in launcher_labels)
         assert any("Settings" in label for label in launcher_labels)
+        assert any("Join Hangout" in label for label in launcher_labels)
         assert set(widget.dashboard_launcher_rows) == {
-            "application", "script", "shortcut"}
+            "application", "script", "shortcut", "automation"}
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()
@@ -706,6 +707,13 @@ def test_dashboard_launcher_dispatches_without_agent_or_model():
         assert button.text().startswith("×")
         widget._set_launcher_edit_mode(False)
         assert button.text() == "Save"
+        with patch.object(widget.worker, "submit_text", return_value=True) as submit:
+            widget._run_dashboard_launcher({
+                "kind": "automation", "label": "Join Hangout + Camera",
+                "payload": "Open Discord and join Hangout with camera on."})
+            submit.assert_called_once_with(
+                "Open Discord and join Hangout with camera on.",
+                display_text="Join Hangout + Camera")
     finally:
         widget.worker.shutdown()
         widget.media_worker.shutdown()

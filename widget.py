@@ -1309,7 +1309,8 @@ class JarvisWidget(QWidget):
         for kind, title, add_handler in (
                 ("application", "Applications", self._add_dashboard_application),
                 ("script", "Scripts", self._add_dashboard_script),
-                ("shortcut", "Shortcuts", self._add_dashboard_shortcut)):
+                ("shortcut", "Shortcuts", self._add_dashboard_shortcut),
+                ("automation", "Automations", self._add_dashboard_automation)):
             row = QHBoxLayout()
             row.setSpacing(6)
             heading = QLabel(title)
@@ -1975,6 +1976,15 @@ class JarvisWidget(QWidget):
             {"kind": "application", "label": "Explorer", "payload": "explorer.exe"},
             {"kind": "application", "label": "Terminal", "payload": "wt.exe"},
             {"kind": "application", "label": "Settings", "payload": "ms-settings:"},
+            {
+                "kind": "automation",
+                "label": "Join Hangout + Camera",
+                "payload": (
+                    "Open the installed Discord desktop app. Navigate to the Hangout "
+                    "voice channel in the currently selected server, join the voice call, "
+                    "wait until the connection is established, and then turn on my camera. "
+                    "Verify that both the call and camera are active."),
+            },
         )
         for entry in defaults:
             if entry["payload"] not in self.dashboard_hidden_default_launchers:
@@ -2038,6 +2048,9 @@ class JarvisWidget(QWidget):
         if kind == "shortcut":
             return QApplication.style().standardIcon(
                 QStyle.StandardPixmap.SP_ArrowRight)
+        if kind == "automation":
+            return QApplication.style().standardIcon(
+                QStyle.StandardPixmap.SP_ComputerIcon)
         return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
 
     def _activate_dashboard_launcher(self, button):
@@ -2116,6 +2129,10 @@ class JarvisWidget(QWidget):
         self._prompt_dashboard_launcher(
             "shortcut", "Keyboard shortcut (example: ctrl+shift+s):")
 
+    def _add_dashboard_automation(self):
+        self._prompt_dashboard_launcher(
+            "automation", "Describe every step the automation should perform:")
+
     def _run_dashboard_launcher(self, entry):
         kind = entry.get("kind")
         payload = str(entry.get("payload", "")).strip()
@@ -2142,8 +2159,14 @@ class JarvisWidget(QWidget):
                 from jarvis.tools.pyautogui_tool import keyboard_hotkey
                 self.collapse_island()
                 QTimer.singleShot(180, lambda: keyboard_hotkey(payload))
+            elif kind == "automation":
+                accepted = self.worker.submit_text(
+                    payload, display_text=str(entry.get("label", "Run automation")))
+                if not accepted:
+                    self.add_message("Assistant", "Dexget is already working on another task.")
         except Exception as exc:
-            self._append_message(f"Could not run {entry.get('label', 'launcher')}: {exc}")
+            self.add_message(
+                "Assistant", f"Could not run {entry.get('label', 'launcher')}: {exc}")
         self._keep_feature_open()
 
     def _pin_current_clipboard(self):
