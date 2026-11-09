@@ -290,6 +290,7 @@ class FileShelfWidget(QFrame):
     """A compact, draggable holding area for files dropped on the notch."""
     drag_requested = pyqtSignal()
     clear_requested = pyqtSignal()
+    activate_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -300,10 +301,10 @@ class FileShelfWidget(QFrame):
             QLabel { background: transparent; color: white; border: none; }
         """)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 3, 4, 3)
-        layout.setSpacing(9)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(8)
         self.icon_label = QLabel()
-        self.icon_label.setFixedSize(30, 30)
+        self.icon_label.setFixedSize(28, 28)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.name_label = QLabel("File")
         self.name_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
@@ -352,6 +353,72 @@ class FileShelfWidget(QFrame):
             self._press_pos = None
             self.setCursor(Qt.CursorShape.OpenHandCursor)
             self.drag_requested.emit()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        activate = (self._press_pos is not None and
+                    event.button() == Qt.MouseButton.LeftButton)
+        self._press_pos = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        if activate:
+            self.activate_requested.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class FileShelfCard(QFrame):
+    """One file tile in the expanded shelf."""
+    drag_requested = pyqtSignal(str)
+    remove_requested = pyqtSignal(str)
+
+    def __init__(self, path):
+        super().__init__()
+        self.path = path
+        self._press_pos = None
+        self.setFixedSize(112, 108)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setToolTip(path + "\n\nDrag to copy • Right-click to remove")
+        self.setStyleSheet("""
+            FileShelfCard { background: #202124; border-radius: 15px; border: none; }
+            FileShelfCard:hover { background: #2a2b2f; }
+            QLabel { background: transparent; color: white; border: none; }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 8)
+        layout.setSpacing(5)
+        icon = QLabel()
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setPixmap(QFileIconProvider().icon(QFileInfo(path)).pixmap(48, 48))
+        name = QLabel(os.path.basename(path.rstrip("\\/")) or path)
+        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        name.setToolTip(path)
+        metrics = name.fontMetrics()
+        name.setText(metrics.elidedText(name.text(), Qt.TextElideMode.ElideRight, 90))
+        layout.addWidget(icon, 1)
+        layout.addWidget(name)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self.remove_requested.emit(self.path)
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (self._press_pos is not None and
+                event.buttons() & Qt.MouseButton.LeftButton and
+                (event.position().toPoint() - self._press_pos).manhattanLength() >=
+                QApplication.startDragDistance()):
+            self._press_pos = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.drag_requested.emit(self.path)
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -728,7 +795,8 @@ class JarvisWidget(QWidget):
     # The idle surface is a physical-laptop-style notch containing only the
     # clock and battery.  Its top edge is flush with the display bezel.
     COLLAPSED_SIZE = QSize(178, 34)
-    FILE_SHELF_SIZE = QSize(300, 48)
+    FILE_SHELF_SIZE = QSize(224, 42)
+    FILE_SHELF_EXPANDED_SIZE = QSize(440, 210)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)
@@ -1104,6 +1172,7 @@ class JarvisWidget(QWidget):
         self.file_shelf_widget = FileShelfWidget()
         self.file_shelf_widget.drag_requested.connect(self._begin_file_shelf_drag)
         self.file_shelf_widget.clear_requested.connect(self._clear_file_shelf)
+        self.file_shelf_widget.activate_requested.connect(self.toggle_island)
         self.file_shelf_widget.hide()
 
         self.timer_status_widget = QWidget()
@@ -1564,6 +1633,45 @@ class JarvisWidget(QWidget):
         self.dashboard_nav_buttons["home"].setChecked(True)
         self.dashboard_widget.hide()
 
+        self.file_shelf_panel = QFrame()
+        self.file_shelf_panel.setObjectName("FileShelfPanel")
+        self.file_shelf_panel.setStyleSheet("""
+            QFrame#FileShelfPanel { background: transparent; }
+            QLabel#ShelfTitle { color: #9b9ba1; font-size: 11px;
+                                font-weight: 800; letter-spacing: 1px; }
+            QPushButton { background: #2a2a2d; color: white; border: none;
+                          border-radius: 17px; padding: 7px 13px; font-weight: 600; }
+            QPushButton:hover { background: #36363a; }
+        """)
+        shelf_panel_layout = QVBoxLayout(self.file_shelf_panel)
+        shelf_panel_layout.setContentsMargins(0, 0, 0, 0)
+        shelf_panel_layout.setSpacing(10)
+        shelf_header = QHBoxLayout()
+        self.file_shelf_title = QLabel("▰  SHELF  0")
+        self.file_shelf_title.setObjectName("ShelfTitle")
+        shelf_header.addWidget(self.file_shelf_title)
+        shelf_header.addStretch()
+        shelf_hint = QLabel("Drag a file out to copy")
+        shelf_hint.setStyleSheet("color:#8e8e93; font-size:10px;")
+        shelf_header.addWidget(shelf_hint)
+        self.file_shelf_clear_btn = QPushButton("Clear")
+        self.file_shelf_clear_btn.clicked.connect(self._clear_file_shelf)
+        shelf_header.addWidget(self.file_shelf_clear_btn)
+        shelf_panel_layout.addLayout(shelf_header)
+        self.file_shelf_scroll = QScrollArea()
+        self.file_shelf_scroll.setWidgetResizable(True)
+        self.file_shelf_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.file_shelf_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.file_shelf_scroll.setStyleSheet("QScrollArea { background:transparent; border:none; }")
+        self.file_shelf_cards_host = QWidget()
+        self.file_shelf_cards_layout = QHBoxLayout(self.file_shelf_cards_host)
+        self.file_shelf_cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.file_shelf_cards_layout.setSpacing(10)
+        self.file_shelf_cards_layout.addStretch()
+        self.file_shelf_scroll.setWidget(self.file_shelf_cards_host)
+        shelf_panel_layout.addWidget(self.file_shelf_scroll, 1)
+        self.file_shelf_panel.hide()
+
         feature_actions = QHBoxLayout()
         feature_actions.setSpacing(8)
         self.feature_primary_btn = QPushButton("Screen Assist")
@@ -1588,6 +1696,7 @@ class JarvisWidget(QWidget):
         feature_layout.addWidget(self.feature_detail)
         feature_layout.addWidget(self.media_feature_widget)
         feature_layout.addWidget(self.dashboard_widget)
+        feature_layout.addWidget(self.file_shelf_panel)
         feature_layout.addStretch()
         feature_layout.addLayout(feature_actions)
         self.feature_panel.hide()
@@ -1800,7 +1909,7 @@ class JarvisWidget(QWidget):
 
     def _feature_uses_dashboard(self):
         """Calls keep useful compact controls but expand into the tool dashboard."""
-        return (self._displaying_default_page() or
+        return (not self._file_shelf_paths and self._displaying_default_page() or
                 bool(self._call_context and not self._media))
 
     def _sync_compact_surface(self):
@@ -2585,6 +2694,8 @@ class JarvisWidget(QWidget):
         # Size from the page the user is viewing, not merely from background
         # activity. A swiped-away media session must not lend its player size
         # to the default dashboard page.
+        if self._file_shelf_paths and self._displaying_default_page():
+            return QSize(self.FILE_SHELF_EXPANDED_SIZE)
         if self._feature_uses_dashboard():
             return QSize(self.DASHBOARD_EXPANDED_SIZE)
         if self._media:
@@ -3047,17 +3158,21 @@ class JarvisWidget(QWidget):
         # Contextual activities stay focused on their own controls.  Dexget AI
         # is intentionally available only from the default compact island.
         self.feature_ai_btn.hide()
-        dashboard_mode = self._feature_uses_dashboard()
-        media_mode = bool(self._media) and not dashboard_mode
+        shelf_mode = bool(self._file_shelf_paths and self._displaying_default_page())
+        dashboard_mode = not shelf_mode and self._feature_uses_dashboard()
+        media_mode = bool(self._media) and not dashboard_mode and not shelf_mode
         for widget in (self.feature_eyebrow, self.feature_title,
                        self.feature_detail, self.feature_primary_btn):
-            widget.setVisible(not media_mode and not dashboard_mode)
+            widget.setVisible(not media_mode and not dashboard_mode and not shelf_mode)
         self.media_feature_widget.setVisible(media_mode)
         self.dashboard_widget.setVisible(dashboard_mode)
+        self.file_shelf_panel.setVisible(shelf_mode)
         if media_mode:
             self._update_media_feature_panel()
         elif dashboard_mode:
             self._refresh_dashboard_system_info()
+        elif shelf_mode:
+            self._refresh_file_shelf_panel()
 
     @staticmethod
     def _format_media_time(seconds):
@@ -3130,7 +3245,8 @@ class JarvisWidget(QWidget):
     def _show_feature_content(self):
         if self.is_expanded and self._expanded_view == "feature":
             self.title_bar.setVisible(
-                not bool(self._media) and not self._feature_uses_dashboard())
+                not bool(self._media) and not self._feature_uses_dashboard()
+                and not bool(self._file_shelf_paths))
             self.feature_panel.show()
 
     def expand_feature(self):
@@ -3149,7 +3265,8 @@ class JarvisWidget(QWidget):
         # The expanded player is a single unified surface; do not stack the
         # compact media pill above it and duplicate artwork/title/controls.
         self.title_bar.setVisible(
-            not bool(self._media) and not self._feature_uses_dashboard())
+            not bool(self._media) and not self._feature_uses_dashboard()
+            and not bool(self._file_shelf_paths))
         generation = self._animate_to(
             self._feature_expanded_size(), self.PANEL_TRANSITION_MS)
         QTimer.singleShot(
@@ -4103,15 +4220,47 @@ class JarvisWidget(QWidget):
             self.toggle_island()
 
     def _file_shelf_mime_data(self):
+        return self._file_shelf_mime_data_for(self._file_shelf_paths)
+
+    @staticmethod
+    def _file_shelf_mime_data_for(paths):
         mime = QMimeData()
-        mime.setUrls([QUrl.fromLocalFile(path) for path in self._file_shelf_paths
+        mime.setUrls([QUrl.fromLocalFile(path) for path in paths
                       if os.path.exists(path)])
         return mime
 
+    def _refresh_file_shelf_panel(self):
+        if not hasattr(self, "file_shelf_cards_layout"):
+            return
+        while self.file_shelf_cards_layout.count():
+            item = self.file_shelf_cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        for path in self._file_shelf_paths:
+            card = FileShelfCard(path)
+            card.drag_requested.connect(
+                lambda selected, self=self: self._begin_file_shelf_drag([selected]))
+            card.remove_requested.connect(self._remove_file_from_shelf)
+            self.file_shelf_cards_layout.addWidget(card)
+        self.file_shelf_cards_layout.addStretch()
+        self.file_shelf_title.setText(f"▰  SHELF  {len(self._file_shelf_paths)}")
+
+    def _remove_file_from_shelf(self, path):
+        key = os.path.normcase(os.path.abspath(path))
+        self._file_shelf_paths = [
+            item for item in self._file_shelf_paths
+            if os.path.normcase(os.path.abspath(item)) != key]
+        if not self._file_shelf_paths:
+            self._clear_file_shelf(force=True)
+            return
+        self.file_shelf_widget.set_files(self._file_shelf_paths)
+        self._refresh_file_shelf_panel()
+
     def _store_file_shelf(self, paths):
         """Hold local paths without moving or modifying their source files."""
-        unique = []
-        seen = set()
+        unique = list(self._file_shelf_paths)
+        seen = {os.path.normcase(os.path.abspath(item)) for item in unique}
         for raw_path in paths:
             path = os.path.abspath(os.fspath(raw_path))
             key = os.path.normcase(path)
@@ -4122,17 +4271,20 @@ class JarvisWidget(QWidget):
             return False
         self._file_shelf_paths = unique
         self.file_shelf_widget.set_files(unique)
+        self._refresh_file_shelf_panel()
         self._default_page_override = True
         self._activity_page = "default"
         self._sync_compact_surface()
         self._present_compact(self.FILE_SHELF_SIZE)
         return True
 
-    def _clear_file_shelf(self):
-        if not self._file_shelf_paths:
+    def _clear_file_shelf(self, force=False):
+        if not self._file_shelf_paths and not force:
             return
         self._file_shelf_paths = []
         self.file_shelf_widget.set_files([])
+        self.is_expanded = False
+        self.file_shelf_panel.hide()
         self._default_page_override = False
         if self._timer_active:
             self._activity_page = "timer"
@@ -4143,8 +4295,9 @@ class JarvisWidget(QWidget):
         self._sync_compact_surface()
         self._present_compact(self._compact_size())
 
-    def _begin_file_shelf_drag(self):
-        mime = self._file_shelf_mime_data()
+    def _begin_file_shelf_drag(self, paths=None):
+        paths = list(paths or self._file_shelf_paths)
+        mime = self._file_shelf_mime_data_for(paths)
         if not mime.hasUrls():
             self._clear_file_shelf()
             return
@@ -4152,11 +4305,19 @@ class JarvisWidget(QWidget):
         self._swipe_start_pos = None
         drag = QDrag(self.file_shelf_widget)
         drag.setMimeData(mime)
-        first = self._file_shelf_paths[0]
+        first = paths[0]
         drag.setPixmap(QFileIconProvider().icon(QFileInfo(first)).pixmap(48, 48))
         result = drag.exec(Qt.DropAction.CopyAction, Qt.DropAction.CopyAction)
         if result == Qt.DropAction.CopyAction:
-            self._clear_file_shelf()
+            removed = {os.path.normcase(os.path.abspath(path)) for path in paths}
+            self._file_shelf_paths = [
+                item for item in self._file_shelf_paths
+                if os.path.normcase(os.path.abspath(item)) not in removed]
+            if self._file_shelf_paths:
+                self.file_shelf_widget.set_files(self._file_shelf_paths)
+                self._refresh_file_shelf_panel()
+            else:
+                self._clear_file_shelf(force=True)
 
     @staticmethod
     def _local_drop_paths(mime):

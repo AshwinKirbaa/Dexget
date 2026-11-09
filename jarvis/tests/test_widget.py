@@ -994,17 +994,25 @@ def test_file_shelf_holds_local_file_and_restores_default_notch(tmp_path):
     try:
         held_file = tmp_path / "report.txt"
         held_file.write_text("Dexget file shelf", encoding="utf-8")
+        second_file = tmp_path / "roadmap.pdf"
+        second_file.write_bytes(b"%PDF shelf")
 
         assert widget._store_file_shelf([str(held_file), str(held_file)])
+        assert widget._store_file_shelf([str(second_file)])
         app.processEvents()
-        assert widget._file_shelf_paths == [str(held_file.resolve())]
+        assert widget._file_shelf_paths == [
+            str(held_file.resolve()), str(second_file.resolve())]
         assert widget._compact_size() == widget.FILE_SHELF_SIZE
+        assert widget._feature_expanded_size() == widget.FILE_SHELF_EXPANDED_SIZE
         assert not widget.file_shelf_widget.isHidden()
         assert widget.default_status_widget.isHidden()
         assert widget.file_shelf_widget.name_label.text() == "report.txt"
+        assert widget.file_shelf_widget.count_label.text() == "+1"
+        assert widget.file_shelf_title.text().endswith("2")
 
         mime = widget._file_shelf_mime_data()
         assert mime.hasUrls()
+        assert len(mime.urls()) == 2
         assert os.path.normcase(os.path.normpath(mime.urls()[0].toLocalFile())) == \
             os.path.normcase(os.path.normpath(str(held_file.resolve())))
         assert held_file.exists()
@@ -1016,6 +1024,7 @@ def test_file_shelf_holds_local_file_and_restores_default_notch(tmp_path):
         assert not widget.default_status_widget.isHidden()
         assert widget._compact_size() == widget.COLLAPSED_SIZE
         assert held_file.exists()
+        assert second_file.exists()
     finally:
         widget.media_worker.shutdown()
         widget.media_worker.wait(2000)
