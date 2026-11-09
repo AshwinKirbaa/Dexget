@@ -1005,7 +1005,9 @@ def test_file_shelf_holds_local_file_and_restores_default_notch(tmp_path):
         assert widget._compact_size() == widget.FILE_SHELF_SIZE
         assert widget._feature_expanded_size() == widget.FILE_SHELF_EXPANDED_SIZE
         assert not widget.file_shelf_widget.isHidden()
-        assert widget.default_status_widget.isHidden()
+        assert not widget.default_status_widget.isHidden()
+        assert not widget.default_clock_label.isHidden()
+        assert not widget.default_battery_indicator.isHidden()
         assert widget.file_shelf_widget.name_label.text() == "report.txt"
         assert widget.file_shelf_widget.count_label.text() == "2"
         assert widget.file_shelf_widget.name_label.isHidden()

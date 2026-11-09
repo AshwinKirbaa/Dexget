@@ -818,7 +818,9 @@ class JarvisWidget(QWidget):
     # The idle surface is a physical-laptop-style notch containing only the
     # clock and battery.  Its top edge is flush with the display bezel.
     COLLAPSED_SIZE = QSize(178, 34)
-    FILE_SHELF_SIZE = QSize(72, 34)
+    # The shelf keeps the normal status data visible around the held file:
+    # time on the left, file icon in the optical centre, battery on the right.
+    FILE_SHELF_SIZE = QSize(220, 34)
     FILE_SHELF_EXPANDED_SIZE = QSize(440, 210)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
@@ -1186,17 +1188,20 @@ class JarvisWidget(QWidget):
         self.default_clock_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         self.default_clock_label.setStyleSheet("color: white;")
         self.default_clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.default_clock_label.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        default_status_layout.addWidget(self.default_clock_label, 1)
-        default_status_layout.addWidget(self.default_battery_indicator)
-        self.default_status_widget.hide()
-
         self.file_shelf_widget = FileShelfWidget()
         self.file_shelf_widget.drag_requested.connect(self._begin_file_shelf_drag)
         self.file_shelf_widget.clear_requested.connect(self._clear_file_shelf)
         self.file_shelf_widget.activate_requested.connect(self.toggle_island)
         self.file_shelf_widget.hide()
+        self.default_clock_label.setFixedWidth(62)
+        self.default_clock_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        default_status_layout.addWidget(self.default_clock_label)
+        default_status_layout.addStretch(1)
+        default_status_layout.addWidget(self.file_shelf_widget)
+        default_status_layout.addStretch(1)
+        default_status_layout.addWidget(self.default_battery_indicator)
+        self.default_status_widget.hide()
 
         self.timer_status_widget = QWidget()
         timer_status_layout = QHBoxLayout(self.timer_status_widget)
@@ -1235,7 +1240,6 @@ class JarvisWidget(QWidget):
         # collapses this layout to zero because its labels use Ignored sizing.
         title_layout.addWidget(self.identity_widget, 1)
         title_layout.addWidget(self.default_status_widget, 1)
-        title_layout.addWidget(self.file_shelf_widget, 1)
         title_layout.addWidget(self.timer_status_widget, 1)
         title_layout.addWidget(self.charging_label)
         title_layout.addWidget(self.low_power_label)
@@ -1952,7 +1956,7 @@ class JarvisWidget(QWidget):
         self.title_bar.setFixedHeight(
             self.FILE_SHELF_SIZE.height() if shelf_visible else
             self.COLLAPSED_SIZE.height() if default else 48)
-        self.default_status_widget.setVisible(default)
+        self.default_status_widget.setVisible(default or shelf_visible)
         self.file_shelf_widget.setVisible(shelf_visible)
         self.timer_status_widget.setVisible(timer_visible)
         if shelf_visible:
