@@ -299,18 +299,18 @@ class FileShelfWidget(QFrame):
         self.setStyleSheet("""
             QFrame { background: transparent; border: none; }
             QLabel { background: transparent; color: white; border: none; }
-            QLabel#ShelfIcon { background: #1d2026; border-radius: 8px;
+            QLabel#ShelfIcon { background: #1d2026; border-radius: 6px;
                                border: 1px solid rgba(255,255,255,24); }
             QLabel#ShelfCount { background: #292d35; color: #78d7ff;
                                 border-radius: 9px; padding: 1px 6px;
                                 font-weight: 700; }
         """)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setContentsMargins(0, 5, 0, 5)
         layout.setSpacing(0)
         self.icon_label = QLabel()
         self.icon_label.setObjectName("ShelfIcon")
-        self.icon_label.setFixedSize(34, 34)
+        self.icon_label.setFixedSize(24, 24)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.name_label = QLabel("File")
         self.name_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
@@ -342,7 +342,7 @@ class FileShelfWidget(QFrame):
             return
         first = paths[0]
         self.icon_label.setPixmap(
-            QFileIconProvider().icon(QFileInfo(first)).pixmap(26, 26))
+            QFileIconProvider().icon(QFileInfo(first)).pixmap(18, 18))
         filename = os.path.basename(first.rstrip("\\/")) or first
         self.name_label.setText(self.name_label.fontMetrics().elidedText(
             filename, Qt.TextElideMode.ElideRight, 165))
@@ -818,7 +818,7 @@ class JarvisWidget(QWidget):
     # The idle surface is a physical-laptop-style notch containing only the
     # clock and battery.  Its top edge is flush with the display bezel.
     COLLAPSED_SIZE = QSize(178, 34)
-    FILE_SHELF_SIZE = QSize(72, 48)
+    FILE_SHELF_SIZE = QSize(72, 34)
     FILE_SHELF_EXPANDED_SIZE = QSize(440, 210)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
