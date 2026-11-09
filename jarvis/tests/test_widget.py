@@ -1007,7 +1007,7 @@ def test_file_shelf_holds_local_file_and_restores_default_notch(tmp_path):
         assert not widget.file_shelf_widget.isHidden()
         assert widget.default_status_widget.isHidden()
         assert widget.file_shelf_widget.name_label.text() == "report.txt"
-        assert widget.file_shelf_widget.count_label.text() == "+1"
+        assert widget.file_shelf_widget.count_label.text() == "2"
         assert widget.file_shelf_title.text().endswith("2")
 
         mime = widget._file_shelf_mime_data()

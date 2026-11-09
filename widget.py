@@ -299,25 +299,44 @@ class FileShelfWidget(QFrame):
         self.setStyleSheet("""
             QFrame { background: transparent; border: none; }
             QLabel { background: transparent; color: white; border: none; }
+            QLabel#ShelfIcon { background: #1d2026; border-radius: 8px;
+                               border: 1px solid rgba(255,255,255,24); }
+            QLabel#ShelfCount { background: #292d35; color: #78d7ff;
+                                border-radius: 9px; padding: 1px 6px;
+                                font-weight: 700; }
+            QLabel#ShelfDivider { color: #3b3e45; }
         """)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(8)
+        layout.setContentsMargins(2, 3, 3, 3)
+        layout.setSpacing(7)
         self.icon_label = QLabel()
-        self.icon_label.setFixedSize(28, 28)
+        self.icon_label.setObjectName("ShelfIcon")
+        self.icon_label.setFixedSize(34, 34)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.name_label = QLabel("File")
         self.name_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         self.name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.type_label = QLabel("Ready to drag")
+        self.type_label.setFont(QFont("Segoe UI", 7))
+        self.type_label.setStyleSheet("color: #8e949e;")
+        identity = QVBoxLayout()
+        identity.setContentsMargins(0, 1, 0, 1)
+        identity.setSpacing(0)
+        identity.addWidget(self.name_label)
+        identity.addWidget(self.type_label)
         self.count_label = QLabel()
+        self.count_label.setObjectName("ShelfCount")
         self.count_label.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
-        self.count_label.setStyleSheet("color: #8ed8ff;")
-        self.hint_label = QLabel("Drag out")
+        self.count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.divider_label = QLabel("│")
+        self.divider_label.setObjectName("ShelfDivider")
+        self.hint_label = QLabel("⠿  Drag")
         self.hint_label.setFont(QFont("Segoe UI", 8))
-        self.hint_label.setStyleSheet("color: #a9adb5;")
+        self.hint_label.setStyleSheet("color: #c3c7cf;")
         layout.addWidget(self.icon_label)
-        layout.addWidget(self.name_label, 1)
+        layout.addLayout(identity, 1)
         layout.addWidget(self.count_label)
+        layout.addWidget(self.divider_label)
         layout.addWidget(self.hint_label)
 
     def set_files(self, paths):
@@ -325,14 +344,23 @@ class FileShelfWidget(QFrame):
         if not paths:
             self.icon_label.clear()
             self.name_label.setText("File")
+            self.type_label.setText("Ready to drag")
             self.count_label.clear()
             self.setToolTip("")
             return
         first = paths[0]
         self.icon_label.setPixmap(
-            QFileIconProvider().icon(QFileInfo(first)).pixmap(28, 28))
-        self.name_label.setText(os.path.basename(first.rstrip("\\/")) or first)
-        self.count_label.setText(f"+{len(paths) - 1}" if len(paths) > 1 else "")
+            QFileIconProvider().icon(QFileInfo(first)).pixmap(26, 26))
+        filename = os.path.basename(first.rstrip("\\/")) or first
+        self.name_label.setText(self.name_label.fontMetrics().elidedText(
+            filename, Qt.TextElideMode.ElideRight, 125))
+        if os.path.isdir(first):
+            file_type = "Folder"
+        else:
+            extension = os.path.splitext(filename)[1].lstrip(".").upper()
+            file_type = f"{extension} file" if extension else "File"
+        self.type_label.setText(file_type if len(paths) == 1 else f"{len(paths)} items ready")
+        self.count_label.setText(str(len(paths)) if len(paths) > 1 else "")
         self.setToolTip("\n".join(paths) + "\n\nDrag to copy • Right-click to clear")
 
     def mousePressEvent(self, event):
@@ -378,12 +406,14 @@ class FileShelfCard(QFrame):
         super().__init__()
         self.path = path
         self._press_pos = None
-        self.setFixedSize(112, 108)
+        self.setFixedSize(116, 112)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setToolTip(path + "\n\nDrag to copy • Right-click to remove")
         self.setStyleSheet("""
-            FileShelfCard { background: #202124; border-radius: 15px; border: none; }
-            FileShelfCard:hover { background: #2a2b2f; }
+            FileShelfCard { background: #1b1d22; border-radius: 16px;
+                            border: 1px solid rgba(255,255,255,18); }
+            FileShelfCard:hover { background: #252831;
+                                  border: 1px solid rgba(99,207,255,65); }
             QLabel { background: transparent; color: white; border: none; }
         """)
         layout = QVBoxLayout(self)
@@ -398,8 +428,14 @@ class FileShelfCard(QFrame):
         name.setToolTip(path)
         metrics = name.fontMetrics()
         name.setText(metrics.elidedText(name.text(), Qt.TextElideMode.ElideRight, 90))
+        suffix = os.path.splitext(path)[1].lstrip(".").upper()
+        kind = QLabel("FOLDER" if os.path.isdir(path) else (suffix or "FILE"))
+        kind.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        kind.setFont(QFont("Segoe UI", 7, QFont.Weight.DemiBold))
+        kind.setStyleSheet("color:#7ecfff;")
         layout.addWidget(icon, 1)
         layout.addWidget(name)
+        layout.addWidget(kind)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:
@@ -795,7 +831,7 @@ class JarvisWidget(QWidget):
     # The idle surface is a physical-laptop-style notch containing only the
     # clock and battery.  Its top edge is flush with the display bezel.
     COLLAPSED_SIZE = QSize(178, 34)
-    FILE_SHELF_SIZE = QSize(224, 42)
+    FILE_SHELF_SIZE = QSize(278, 48)
     FILE_SHELF_EXPANDED_SIZE = QSize(440, 210)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
