@@ -15,9 +15,10 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
 from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QParallelAnimationGroup, QVariantAnimation,
-                          QRectF, QAbstractAnimation, QSettings, QEvent, QFileInfo)
+                          QRectF, QAbstractAnimation, QSettings, QEvent, QFileInfo,
+                          QMimeData, QUrl)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
-                         QPainterPath, QRegion, QCursor, QPixmap, QAction)
+                         QPainterPath, QRegion, QCursor, QPixmap, QAction, QDrag)
 
 import jarvis_integration
 
@@ -283,6 +284,82 @@ class CompactBatteryStatus(QWidget):
         painter.drawText(QRectF(29.0, 0.0, 33.0, 24.0),
                          Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                          text)
+
+
+class FileShelfWidget(QFrame):
+    """A compact, draggable holding area for files dropped on the notch."""
+    drag_requested = pyqtSignal()
+    clear_requested = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self._press_pos = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setStyleSheet("""
+            QFrame { background: transparent; border: none; }
+            QLabel { background: transparent; color: white; border: none; }
+        """)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 3, 4, 3)
+        layout.setSpacing(9)
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(30, 30)
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.name_label = QLabel("File")
+        self.name_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.count_label = QLabel()
+        self.count_label.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        self.count_label.setStyleSheet("color: #8ed8ff;")
+        self.hint_label = QLabel("Drag out")
+        self.hint_label.setFont(QFont("Segoe UI", 8))
+        self.hint_label.setStyleSheet("color: #a9adb5;")
+        layout.addWidget(self.icon_label)
+        layout.addWidget(self.name_label, 1)
+        layout.addWidget(self.count_label)
+        layout.addWidget(self.hint_label)
+
+    def set_files(self, paths):
+        paths = list(paths)
+        if not paths:
+            self.icon_label.clear()
+            self.name_label.setText("File")
+            self.count_label.clear()
+            self.setToolTip("")
+            return
+        first = paths[0]
+        self.icon_label.setPixmap(
+            QFileIconProvider().icon(QFileInfo(first)).pixmap(28, 28))
+        self.name_label.setText(os.path.basename(first.rstrip("\\/")) or first)
+        self.count_label.setText(f"+{len(paths) - 1}" if len(paths) > 1 else "")
+        self.setToolTip("\n".join(paths) + "\n\nDrag to copy • Right-click to clear")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self.clear_requested.emit()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (self._press_pos is not None and
+                event.buttons() & Qt.MouseButton.LeftButton and
+                (event.position().toPoint() - self._press_pos).manhattanLength() >=
+                QApplication.startDragDistance()):
+            self._press_pos = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.drag_requested.emit()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._press_pos = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().mouseReleaseEvent(event)
 
 
 class EarbudsIndicator(QWidget):
@@ -651,6 +728,7 @@ class JarvisWidget(QWidget):
     # The idle surface is a physical-laptop-style notch containing only the
     # clock and battery.  Its top edge is flush with the display bezel.
     COLLAPSED_SIZE = QSize(178, 34)
+    FILE_SHELF_SIZE = QSize(300, 48)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)
@@ -721,6 +799,7 @@ class JarvisWidget(QWidget):
         self._timer_generation = 0
         self._default_page_override = False
         self._activity_page = "default"
+        self._file_shelf_paths = []
         self._swipe_start_pos = None
         self._global_swipe_start = None
         self._last_page_switch = 0.0
@@ -822,6 +901,7 @@ class JarvisWidget(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool |
                             Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAcceptDrops(True)
         self.resize(self.EXPANDED_SIZE)
         
         main_layout = QVBoxLayout()
@@ -1021,6 +1101,11 @@ class JarvisWidget(QWidget):
         default_status_layout.addWidget(self.default_battery_indicator)
         self.default_status_widget.hide()
 
+        self.file_shelf_widget = FileShelfWidget()
+        self.file_shelf_widget.drag_requested.connect(self._begin_file_shelf_drag)
+        self.file_shelf_widget.clear_requested.connect(self._clear_file_shelf)
+        self.file_shelf_widget.hide()
+
         self.timer_status_widget = QWidget()
         timer_status_layout = QHBoxLayout(self.timer_status_widget)
         timer_status_layout.setContentsMargins(0, 0, 0, 0)
@@ -1058,6 +1143,7 @@ class JarvisWidget(QWidget):
         # collapses this layout to zero because its labels use Ignored sizing.
         title_layout.addWidget(self.identity_widget, 1)
         title_layout.addWidget(self.default_status_widget, 1)
+        title_layout.addWidget(self.file_shelf_widget, 1)
         title_layout.addWidget(self.timer_status_widget, 1)
         title_layout.addWidget(self.charging_label)
         title_layout.addWidget(self.low_power_label)
@@ -1641,7 +1727,8 @@ class JarvisWidget(QWidget):
         screen = QApplication.primaryScreen() or self.screen()
         area = screen.availableGeometry()
         x = area.x() + (area.width() - size.width()) // 2
-        y = (area.y() if size in (self.HIDDEN_SIZE, self.COLLAPSED_SIZE)
+        y = (area.y() if size in (self.HIDDEN_SIZE, self.COLLAPSED_SIZE,
+                                  self.FILE_SHELF_SIZE)
              else area.y() + self.TOP_MARGIN)
         return QRect(x, y, size.width(), size.height())
 
@@ -1659,7 +1746,7 @@ class JarvisWidget(QWidget):
         """)
 
     def _apply_container_style_for_size(self, size):
-        if size == self.COLLAPSED_SIZE:
+        if size in (self.COLLAPSED_SIZE, self.FILE_SHELF_SIZE):
             self.container.setStyleSheet("""
                 #Container {
                     background-color: rgba(8, 10, 14, 252);
@@ -1717,7 +1804,10 @@ class JarvisWidget(QWidget):
                 bool(self._call_context and not self._media))
 
     def _sync_compact_surface(self):
-        default = bool((self._default_page_override or
+        shelf_visible = bool(self._file_shelf_paths and
+                             (self._default_page_override or
+                              self._activity_page == "default"))
+        default = bool(not shelf_visible and (self._default_page_override or
                         (self._activity_page == "default" and self._is_default_activity()))
                        and not any((self._notification_active, self._headset_active,
                                     self._low_power_active, self._charging_active)))
@@ -1728,9 +1818,19 @@ class JarvisWidget(QWidget):
         # centres this row in its normal 48 px bar and the 34 px notch clips
         # the top, leaving the clock and battery visibly too low.
         self.title_bar.setFixedHeight(
+            self.FILE_SHELF_SIZE.height() if shelf_visible else
             self.COLLAPSED_SIZE.height() if default else 48)
         self.default_status_widget.setVisible(default)
+        self.file_shelf_widget.setVisible(shelf_visible)
         self.timer_status_widget.setVisible(timer_visible)
+        if shelf_visible:
+            self.status_dot.hide()
+            self.identity_widget.hide()
+            self.screen_assist_btn.hide()
+            self.close_btn.hide()
+            self.call_mute_btn.hide()
+            self._set_media_controls_visible(False)
+            return
         if timer_visible:
             self.status_dot.hide()
             self.identity_widget.hide()
@@ -2444,6 +2544,8 @@ class JarvisWidget(QWidget):
                 "https://www.google.com/search?q=" + urllib.parse.quote_plus(q))
 
     def _compact_size(self):
+        if self._file_shelf_paths and self._displaying_default_page():
+            return self.FILE_SHELF_SIZE
         if self._displaying_default_page():
             return self.COLLAPSED_SIZE
         if self._notification_active:
@@ -2628,7 +2730,7 @@ class JarvisWidget(QWidget):
         if size.width() <= 0 or size.height() <= 0:
             return
         path = QPainterPath()
-        if size == self.COLLAPSED_SIZE:
+        if size in (self.COLLAPSED_SIZE, self.FILE_SHELF_SIZE):
             # Flat against the display bezel, with the lower corners drawing
             # inward like a built-in laptop camera notch.
             width = float(size.width())
@@ -3999,6 +4101,90 @@ class JarvisWidget(QWidget):
             self._cycle_activity_page(1)
         elif allow_click and abs(delta_x) < 6:
             self.toggle_island()
+
+    def _file_shelf_mime_data(self):
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(path) for path in self._file_shelf_paths
+                      if os.path.exists(path)])
+        return mime
+
+    def _store_file_shelf(self, paths):
+        """Hold local paths without moving or modifying their source files."""
+        unique = []
+        seen = set()
+        for raw_path in paths:
+            path = os.path.abspath(os.fspath(raw_path))
+            key = os.path.normcase(path)
+            if os.path.exists(path) and key not in seen:
+                unique.append(path)
+                seen.add(key)
+        if not unique:
+            return False
+        self._file_shelf_paths = unique
+        self.file_shelf_widget.set_files(unique)
+        self._default_page_override = True
+        self._activity_page = "default"
+        self._sync_compact_surface()
+        self._present_compact(self.FILE_SHELF_SIZE)
+        return True
+
+    def _clear_file_shelf(self):
+        if not self._file_shelf_paths:
+            return
+        self._file_shelf_paths = []
+        self.file_shelf_widget.set_files([])
+        self._default_page_override = False
+        if self._timer_active:
+            self._activity_page = "timer"
+        elif self._media or self._call_context:
+            self._activity_page = "media"
+        else:
+            self._activity_page = "default"
+        self._sync_compact_surface()
+        self._present_compact(self._compact_size())
+
+    def _begin_file_shelf_drag(self):
+        mime = self._file_shelf_mime_data()
+        if not mime.hasUrls():
+            self._clear_file_shelf()
+            return
+        self._global_swipe_start = None
+        self._swipe_start_pos = None
+        drag = QDrag(self.file_shelf_widget)
+        drag.setMimeData(mime)
+        first = self._file_shelf_paths[0]
+        drag.setPixmap(QFileIconProvider().icon(QFileInfo(first)).pixmap(48, 48))
+        result = drag.exec(Qt.DropAction.CopyAction, Qt.DropAction.CopyAction)
+        if result == Qt.DropAction.CopyAction:
+            self._clear_file_shelf()
+
+    @staticmethod
+    def _local_drop_paths(mime):
+        if not mime.hasUrls():
+            return []
+        return [url.toLocalFile() for url in mime.urls()
+                if url.isLocalFile() and url.toLocalFile()]
+
+    def dragEnterEvent(self, event):
+        if self._local_drop_paths(event.mimeData()):
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._local_drop_paths(event.mimeData()):
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+            return
+        event.ignore()
+
+    def dropEvent(self, event):
+        if self._store_file_shelf(self._local_drop_paths(event.mimeData())):
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+            return
+        event.ignore()
 
     def wheelEvent(self, event):
         horizontal = event.pixelDelta().x() or event.angleDelta().x()

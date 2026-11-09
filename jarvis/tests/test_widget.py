@@ -983,3 +983,43 @@ def test_screen_assist_submits_visible_text_and_blocks_proctoring():
         assert widget.worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_file_shelf_holds_local_file_and_restores_default_notch(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(
+            ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        held_file = tmp_path / "report.txt"
+        held_file.write_text("Dexget file shelf", encoding="utf-8")
+
+        assert widget._store_file_shelf([str(held_file), str(held_file)])
+        app.processEvents()
+        assert widget._file_shelf_paths == [str(held_file.resolve())]
+        assert widget._compact_size() == widget.FILE_SHELF_SIZE
+        assert not widget.file_shelf_widget.isHidden()
+        assert widget.default_status_widget.isHidden()
+        assert widget.file_shelf_widget.name_label.text() == "report.txt"
+
+        mime = widget._file_shelf_mime_data()
+        assert mime.hasUrls()
+        assert os.path.normcase(os.path.normpath(mime.urls()[0].toLocalFile())) == \
+            os.path.normcase(os.path.normpath(str(held_file.resolve())))
+        assert held_file.exists()
+
+        widget._clear_file_shelf()
+        app.processEvents()
+        assert widget._file_shelf_paths == []
+        assert widget.file_shelf_widget.isHidden()
+        assert not widget.default_status_widget.isHidden()
+        assert widget._compact_size() == widget.COLLAPSED_SIZE
+        assert held_file.exists()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
