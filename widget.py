@@ -306,8 +306,8 @@ class FileShelfWidget(QFrame):
                                 font-weight: 700; }
         """)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(9, 4, 9, 4)
-        layout.setSpacing(7)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(0)
         self.icon_label = QLabel()
         self.icon_label.setObjectName("ShelfIcon")
         self.icon_label.setFixedSize(34, 34)
@@ -324,10 +324,12 @@ class FileShelfWidget(QFrame):
         self.hint_label.setStyleSheet("color: #aeb3bc;")
         self.hint_label.setMinimumWidth(48)
         self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.name_label.hide()
+        self.count_label.hide()
+        self.hint_label.hide()
+        layout.addStretch()
         layout.addWidget(self.icon_label)
-        layout.addWidget(self.name_label, 1)
-        layout.addWidget(self.count_label)
-        layout.addWidget(self.hint_label)
+        layout.addStretch()
 
     def set_files(self, paths):
         paths = list(paths)
@@ -345,7 +347,7 @@ class FileShelfWidget(QFrame):
         self.name_label.setText(self.name_label.fontMetrics().elidedText(
             filename, Qt.TextElideMode.ElideRight, 165))
         self.count_label.setText(str(len(paths)) if len(paths) > 1 else "")
-        self.count_label.setVisible(len(paths) > 1)
+        self.count_label.hide()
         self.setToolTip("\n".join(paths) + "\n\nDrag to copy • Right-click to clear")
 
     def mousePressEvent(self, event):
@@ -816,7 +818,7 @@ class JarvisWidget(QWidget):
     # The idle surface is a physical-laptop-style notch containing only the
     # clock and battery.  Its top edge is flush with the display bezel.
     COLLAPSED_SIZE = QSize(178, 34)
-    FILE_SHELF_SIZE = QSize(310, 48)
+    FILE_SHELF_SIZE = QSize(72, 48)
     FILE_SHELF_EXPANDED_SIZE = QSize(440, 210)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
