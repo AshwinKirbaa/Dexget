@@ -304,7 +304,6 @@ class FileShelfWidget(QFrame):
             QLabel#ShelfCount { background: #292d35; color: #78d7ff;
                                 border-radius: 9px; padding: 1px 6px;
                                 font-weight: 700; }
-            QLabel#ShelfDivider { color: #3b3e45; }
         """)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(2, 3, 3, 3)
@@ -328,15 +327,14 @@ class FileShelfWidget(QFrame):
         self.count_label.setObjectName("ShelfCount")
         self.count_label.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
         self.count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.divider_label = QLabel("│")
-        self.divider_label.setObjectName("ShelfDivider")
-        self.hint_label = QLabel("⠿  Drag")
+        self.hint_label = QLabel("Drag out")
         self.hint_label.setFont(QFont("Segoe UI", 8))
-        self.hint_label.setStyleSheet("color: #c3c7cf;")
+        self.hint_label.setStyleSheet("color: #aeb3bc;")
+        self.hint_label.setMinimumWidth(48)
+        self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.icon_label)
         layout.addLayout(identity, 1)
         layout.addWidget(self.count_label)
-        layout.addWidget(self.divider_label)
         layout.addWidget(self.hint_label)
 
     def set_files(self, paths):
@@ -346,6 +344,7 @@ class FileShelfWidget(QFrame):
             self.name_label.setText("File")
             self.type_label.setText("Ready to drag")
             self.count_label.clear()
+            self.count_label.hide()
             self.setToolTip("")
             return
         first = paths[0]
@@ -353,7 +352,7 @@ class FileShelfWidget(QFrame):
             QFileIconProvider().icon(QFileInfo(first)).pixmap(26, 26))
         filename = os.path.basename(first.rstrip("\\/")) or first
         self.name_label.setText(self.name_label.fontMetrics().elidedText(
-            filename, Qt.TextElideMode.ElideRight, 125))
+            filename, Qt.TextElideMode.ElideRight, 165))
         if os.path.isdir(first):
             file_type = "Folder"
         else:
@@ -361,6 +360,7 @@ class FileShelfWidget(QFrame):
             file_type = f"{extension} file" if extension else "File"
         self.type_label.setText(file_type if len(paths) == 1 else f"{len(paths)} items ready")
         self.count_label.setText(str(len(paths)) if len(paths) > 1 else "")
+        self.count_label.setVisible(len(paths) > 1)
         self.setToolTip("\n".join(paths) + "\n\nDrag to copy • Right-click to clear")
 
     def mousePressEvent(self, event):
@@ -831,7 +831,7 @@ class JarvisWidget(QWidget):
     # The idle surface is a physical-laptop-style notch containing only the
     # clock and battery.  Its top edge is flush with the display bezel.
     COLLAPSED_SIZE = QSize(178, 34)
-    FILE_SHELF_SIZE = QSize(278, 48)
+    FILE_SHELF_SIZE = QSize(310, 48)
     FILE_SHELF_EXPANDED_SIZE = QSize(440, 210)
     MEDIA_SIZE = QSize(520, 60)
     CHARGING_SIZE = QSize(360, 56)
