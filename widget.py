@@ -306,7 +306,7 @@ class FileShelfWidget(QFrame):
                                 font-weight: 700; }
         """)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(2, 3, 3, 3)
+        layout.setContentsMargins(9, 4, 9, 4)
         layout.setSpacing(7)
         self.icon_label = QLabel()
         self.icon_label.setObjectName("ShelfIcon")
@@ -315,14 +315,6 @@ class FileShelfWidget(QFrame):
         self.name_label = QLabel("File")
         self.name_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         self.name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.type_label = QLabel("Ready to drag")
-        self.type_label.setFont(QFont("Segoe UI", 7))
-        self.type_label.setStyleSheet("color: #8e949e;")
-        identity = QVBoxLayout()
-        identity.setContentsMargins(0, 1, 0, 1)
-        identity.setSpacing(0)
-        identity.addWidget(self.name_label)
-        identity.addWidget(self.type_label)
         self.count_label = QLabel()
         self.count_label.setObjectName("ShelfCount")
         self.count_label.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
@@ -333,7 +325,7 @@ class FileShelfWidget(QFrame):
         self.hint_label.setMinimumWidth(48)
         self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.icon_label)
-        layout.addLayout(identity, 1)
+        layout.addWidget(self.name_label, 1)
         layout.addWidget(self.count_label)
         layout.addWidget(self.hint_label)
 
@@ -342,7 +334,6 @@ class FileShelfWidget(QFrame):
         if not paths:
             self.icon_label.clear()
             self.name_label.setText("File")
-            self.type_label.setText("Ready to drag")
             self.count_label.clear()
             self.count_label.hide()
             self.setToolTip("")
@@ -353,12 +344,6 @@ class FileShelfWidget(QFrame):
         filename = os.path.basename(first.rstrip("\\/")) or first
         self.name_label.setText(self.name_label.fontMetrics().elidedText(
             filename, Qt.TextElideMode.ElideRight, 165))
-        if os.path.isdir(first):
-            file_type = "Folder"
-        else:
-            extension = os.path.splitext(filename)[1].lstrip(".").upper()
-            file_type = f"{extension} file" if extension else "File"
-        self.type_label.setText(file_type if len(paths) == 1 else f"{len(paths)} items ready")
         self.count_label.setText(str(len(paths)) if len(paths) > 1 else "")
         self.count_label.setVisible(len(paths) > 1)
         self.setToolTip("\n".join(paths) + "\n\nDrag to copy • Right-click to clear")
