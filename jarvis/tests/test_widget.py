@@ -88,7 +88,8 @@ def test_local_search_results_use_readable_scrollable_rows():
             if widget.dashboard_search_results_layout.itemAt(i).widget() is not None
         ]
         assert len(rows) == 8
-        assert all(row.height() == 38 for row in rows)
+        assert all(row.height() == 52 for row in rows)
+        assert "C:\\Apps\\Brave0.exe" in rows[0].text()
         assert widget.dashboard_search_results_scroll.widgetResizable()
         assert widget.dashboard_search_results_scroll.verticalScrollBarPolicy() == \
             Qt.ScrollBarPolicy.ScrollBarAsNeeded

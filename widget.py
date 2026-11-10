@@ -2957,15 +2957,17 @@ class JarvisWidget(QWidget):
         icon_provider = QFileIconProvider()
         for index, result in enumerate(results[:8]):
             path = result["path"]
-            button = QPushButton(f'{result["name"]}    ·    {result["kind"]}')
+            display_path = os.path.normpath(path)
+            button = QPushButton(
+                f'{result["name"]}    ·    {result["kind"]}\n{display_path}')
             button.setIcon(icon_provider.icon(QFileInfo(path)))
             button.setIconSize(QSize(22, 22))
-            button.setFixedHeight(38)
+            button.setFixedHeight(52)
             button.setToolTip(path)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setStyleSheet(
                 "QPushButton { text-align:left; background:#17181b; color:white; "
-                "border-radius:9px; padding:7px 10px; } "
+                "border-radius:9px; padding:6px 10px; font-size:12px; } "
                 "QPushButton:hover { background:#292b30; }")
             button.clicked.connect(
                 lambda checked=False, selected=path: self._open_local_search_result(selected))
