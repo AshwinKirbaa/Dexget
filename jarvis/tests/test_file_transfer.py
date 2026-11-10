@@ -1,4 +1,5 @@
 import os
+import json
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit, urlunsplit
@@ -21,6 +22,10 @@ def test_transfer_server_requires_token_and_moves_files_both_ways(tmp_path):
         with urllib.request.urlopen(url, timeout=3) as response:
             page = response.read().decode("utf-8")
         assert "from-laptop.txt" in page
+
+        with urllib.request.urlopen(url + "api/files", timeout=3) as response:
+            files = json.loads(response.read())["files"]
+        assert files == [{"index": 0, "name": "from-laptop.txt", "size": 11}]
 
         with urllib.request.urlopen(url + "download/0", timeout=3) as response:
             assert response.read() == b"hello phone"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import cgi
 import html
+import json
 import mimetypes
 import os
 import secrets
@@ -103,6 +104,20 @@ input{{max-width:100%}} button{{background:#0a84ff;color:white;border:0;border-r
                     return
                 if len(parts) == 1:
                     self._send_html(self._page())
+                    return
+                if len(parts) == 3 and parts[1:] == ["api", "files"]:
+                    payload = json.dumps({"files": [
+                        {"index": index, "name": Path(path).name,
+                         "size": Path(path).stat().st_size}
+                        for index, path in enumerate(owner.download_paths)
+                        if Path(path).is_file()
+                    ]}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(payload)
                     return
                 if len(parts) == 3 and parts[1] == "download":
                     try:
