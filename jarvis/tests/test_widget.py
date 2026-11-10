@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QPushButton
-from PyQt6.QtCore import QPoint, Qt, QSettings
+from PyQt6.QtWidgets import QApplication, QPushButton, QSizePolicy
+from PyQt6.QtCore import QPoint, Qt, QSettings, QMimeData
 from PyQt6.QtGui import QPixmap
 from jarvis.agent.agent import Agent
 from jarvis.agent.tool_registry import ToolRegistry
@@ -177,13 +177,26 @@ def test_clipboard_history_captures_text_and_screenshots(tmp_path):
             app.processEvents()
             assert widget._clipboard_history[0]["kind"] == "image"
             assert os.path.isfile(widget._clipboard_history[0]["path"])
+
+            long_text = "Dexget-" + ("long-text-" * 100)
+            mixed_clipboard = QMimeData()
+            mixed_clipboard.setText(long_text)
+            mixed_clipboard.setImageData(screenshot.toImage())
+            QApplication.clipboard().setMimeData(mixed_clipboard)
+            app.processEvents()
+            assert widget._clipboard_history[0] == {
+                "kind": "text", "text": long_text}
             latest_row = widget.dashboard_clipboard_buttons[0]
+            content_button = latest_row.findChildren(QPushButton)[0]
             copy_button = latest_row.findChild(
                 QPushButton, "clipboardCopyButton")
             pin_button = latest_row.findChild(
                 QPushButton, "clipboardPinButton")
             assert copy_button is not None
             assert pin_button is not None
+            assert content_button.sizePolicy().horizontalPolicy() == \
+                QSizePolicy.Policy.Ignored
+            assert content_button.text().endswith("…")
             assert widget.dashboard_clipboard_scroll.widgetResizable()
             assert widget.dashboard_clipboard_scroll.verticalScrollBarPolicy() == \
                 Qt.ScrollBarPolicy.ScrollBarAsNeeded

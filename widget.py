@@ -3004,7 +3004,12 @@ class JarvisWidget(QWidget):
         mime = clipboard.mimeData()
         entry = None
         signature = None
-        if mime.hasImage():
+        text_value = clipboard.text().strip() if mime.hasText() else ""
+        if text_value:
+            signature = "text:" + hashlib.sha256(
+                text_value.encode("utf-8", errors="replace")).hexdigest()
+            entry = {"kind": "text", "text": text_value}
+        elif mime.hasImage():
             pixmap = clipboard.pixmap()
             if not pixmap.isNull():
                 image_data = self._clipboard_image_bytes(pixmap)
@@ -3018,12 +3023,6 @@ class JarvisWidget(QWidget):
                 if not os.path.isfile(image_path):
                     pixmap.save(image_path, "PNG")
                 entry = {"kind": "image", "path": image_path, "hash": digest}
-        else:
-            text_value = clipboard.text().strip()
-            if text_value:
-                signature = "text:" + hashlib.sha256(
-                    text_value.encode("utf-8", errors="replace")).hexdigest()
-                entry = {"kind": "text", "text": text_value}
         if entry is None or (not force and signature == self._last_clipboard_signature):
             return
         self._last_clipboard_signature = signature
@@ -3051,6 +3050,9 @@ class JarvisWidget(QWidget):
         row_layout.setSpacing(5)
         button = QPushButton()
         button.setFixedHeight(44)
+        button.setMinimumWidth(0)
+        button.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setStyleSheet(
             "QPushButton { background:#1b1b1e; text-align:left; padding:7px 12px; "
@@ -3066,7 +3068,8 @@ class JarvisWidget(QWidget):
         else:
             text_value = str(entry.get("text", ""))
             preview = " ".join(text_value.split())
-            button.setText(f"  {preview[:90]}")
+            button.setText("  " + button.fontMetrics().elidedText(
+                preview, Qt.TextElideMode.ElideRight, 350))
             button.setToolTip(text_value)
         button.clicked.connect(
             lambda checked=False, value=dict(entry): self._restore_clipboard_entry(value))
