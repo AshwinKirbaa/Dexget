@@ -1880,9 +1880,27 @@ class JarvisWidget(QWidget):
         pin_current.clicked.connect(self._pin_current_clipboard)
         clipboard_header.addWidget(pin_current)
         clipboard_layout.addLayout(clipboard_header)
-        self.dashboard_clipboard_list = QVBoxLayout()
-        clipboard_layout.addLayout(self.dashboard_clipboard_list)
-        clipboard_layout.addStretch()
+        self.dashboard_clipboard_host = QWidget()
+        self.dashboard_clipboard_host.setStyleSheet("background:transparent;")
+        self.dashboard_clipboard_list = QVBoxLayout(
+            self.dashboard_clipboard_host)
+        self.dashboard_clipboard_list.setContentsMargins(0, 0, 0, 0)
+        self.dashboard_clipboard_list.setSpacing(6)
+        self.dashboard_clipboard_list.addStretch(1)
+        self.dashboard_clipboard_scroll = QScrollArea()
+        self.dashboard_clipboard_scroll.setWidgetResizable(True)
+        self.dashboard_clipboard_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.dashboard_clipboard_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.dashboard_clipboard_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.dashboard_clipboard_scroll.setStyleSheet(
+            "QScrollArea { background:transparent; border:none; } "
+            "QScrollBar:vertical { background:transparent; width:5px; } "
+            "QScrollBar::handle:vertical { background:#4a4b52; border-radius:2px; } "
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }")
+        self.dashboard_clipboard_scroll.setWidget(self.dashboard_clipboard_host)
+        clipboard_layout.addWidget(self.dashboard_clipboard_scroll, 1)
 
         focus = page_frame("focus")
         focus_layout = QVBoxLayout(focus)

@@ -184,6 +184,9 @@ def test_clipboard_history_captures_text_and_screenshots(tmp_path):
                 QPushButton, "clipboardPinButton")
             assert copy_button is not None
             assert pin_button is not None
+            assert widget.dashboard_clipboard_scroll.widgetResizable()
+            assert widget.dashboard_clipboard_scroll.verticalScrollBarPolicy() == \
+                Qt.ScrollBarPolicy.ScrollBarAsNeeded
             pin_button.click()
             assert widget._clipboard_history[0]["pinned"] is True
             with open(widget._clipboard_history_file(), encoding="utf-8") as handle:
