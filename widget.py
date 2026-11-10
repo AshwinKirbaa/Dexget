@@ -22,7 +22,7 @@ from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap, QAction, QDrag)
 
 import jarvis_integration
-from jarvis.file_transfer import TransferServer
+from jarvis.file_transfer import TransferServer, current_wifi_credentials, pairing_payload
 
 
 class MacroPlaybackWorker(QThread):
@@ -2560,7 +2560,8 @@ class JarvisWidget(QWidget):
         try:
             url = server.start()
             import qrcode
-            qr = qrcode.make(url)
+            wifi = current_wifi_credentials()
+            qr = qrcode.make(pairing_payload(url, wifi))
             buffer = QBuffer()
             buffer.open(QIODevice.OpenModeFlag.WriteOnly)
             qr.save(buffer, format="PNG")
@@ -2577,8 +2578,9 @@ class JarvisWidget(QWidget):
             156, 156, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation))
         self.transfer_url.setText(url)
+        network_note = " · Wi-Fi auto-connect included" if wifi else ""
         self.transfer_status.setText(
-            f"Pairing active · {len(server.download_paths)} file(s) available from laptop")
+            f"Pairing active · {len(server.download_paths)} file(s) available from laptop{network_note}")
         self.transfer_start.setText("Restart")
         self.transfer_stop.setEnabled(True)
         self.transfer_copy.setEnabled(True)

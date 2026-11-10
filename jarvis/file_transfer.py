@@ -9,13 +9,55 @@ import mimetypes
 import os
 import secrets
 import socket
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+
+
+def parse_wifi_credentials(interface_output: str, profile_output: str):
+    """Extract the active SSID and saved key from English netsh output."""
+    import re
+    ssid_match = re.search(r"(?mi)^\s*SSID\s*:\s*(.+?)\s*$", interface_output or "")
+    key_match = re.search(r"(?mi)^\s*Key Content\s*:\s*(.+?)\s*$", profile_output or "")
+    if not ssid_match or not key_match:
+        return None
+    return ssid_match.group(1).strip(), key_match.group(1).strip()
+
+
+def current_wifi_credentials():
+    """Return the current saved Wi-Fi SSID/key when Windows permits access."""
+    if os.name != "nt":
+        return None
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        interfaces = subprocess.run(
+            ["netsh", "wlan", "show", "interfaces"], capture_output=True,
+            text=True, timeout=5, creationflags=flags).stdout
+        import re
+        match = re.search(r"(?mi)^\s*SSID\s*:\s*(.+?)\s*$", interfaces)
+        if not match:
+            return None
+        ssid = match.group(1).strip()
+        profile = subprocess.run(
+            ["netsh", "wlan", "show", "profile", f"name={ssid}", "key=clear"],
+            capture_output=True, text=True, timeout=5, creationflags=flags).stdout
+        return parse_wifi_credentials(interfaces, profile)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def pairing_payload(endpoint: str, credentials=None) -> str:
+    """Build a QR payload that can join Wi-Fi and then open the endpoint."""
+    if not credentials:
+        return endpoint
+    ssid, password = credentials
+    return "dexget://pair?" + urlencode({
+        "endpoint": endpoint, "ssid": ssid, "password": password})
 
 
 def local_ipv4() -> str:

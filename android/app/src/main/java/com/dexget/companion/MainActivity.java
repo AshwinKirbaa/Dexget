@@ -13,9 +13,11 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.net.Uri;
 import android.net.wifi.WifiNetworkSpecifier;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -47,6 +49,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int PICK_FILES = 41;
     private static final int CAMERA_PERMISSION = 42;
+    private static final int WIFI_PERMISSION = 43;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private SharedPreferences prefs;
     private TextView status;
@@ -55,6 +58,10 @@ public class MainActivity extends Activity {
     private ProgressBar progress;
     private String endpoint = "";
     private Network directNetwork;
+    private String pendingSsid;
+    private String pendingPassword;
+    private String pendingTarget;
+    private boolean wifiConnectionRequested;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -150,12 +157,29 @@ public class MainActivity extends Activity {
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != CAMERA_PERMISSION) return;
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            launchScanner();
-        } else {
-            status.setText("Camera permission is required to scan the pairing QR.");
-            Toast.makeText(this, "Allow Camera permission to pair", Toast.LENGTH_LONG).show();
+        boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        if (requestCode == CAMERA_PERMISSION) {
+            if (granted) launchScanner();
+            else {
+                status.setText("Camera permission is required to scan the pairing QR.");
+                Toast.makeText(this, "Allow Camera permission to pair", Toast.LENGTH_LONG).show();
+            }
+        } else if (requestCode == WIFI_PERMISSION) {
+            if (granted && pendingSsid != null)
+                prepareDirectConnection(pendingSsid, pendingPassword, pendingTarget);
+            else {
+                status.setText("Nearby devices permission is required to join the laptop Wi-Fi.");
+                Toast.makeText(this, "Allow Nearby devices to connect", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (pendingSsid != null && !wifiConnectionRequested) {
+            WifiManager wifi = (WifiManager)getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wifi != null && wifi.isWifiEnabled())
+                prepareDirectConnection(pendingSsid, pendingPassword, pendingTarget);
         }
     }
 
@@ -187,7 +211,10 @@ public class MainActivity extends Activity {
                 candidate = URLDecoder.decode(encodedEndpoint, "UTF-8");
                 String ssid = uri.getQueryParameter("ssid");
                 String password = uri.getQueryParameter("password");
-                if (ssid != null && password != null) connectDirect(ssid, password, candidate);
+                if (ssid != null && password != null) {
+                    prepareDirectConnection(ssid, password, candidate);
+                    return;
+                }
             }
             if (!candidate.startsWith("http://") && !candidate.startsWith("https://"))
                 throw new IllegalArgumentException("Not a Dexget pairing code");
@@ -200,9 +227,32 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void prepareDirectConnection(String ssid, String password, String target) {
+        pendingSsid = ssid;
+        pendingPassword = password;
+        pendingTarget = target;
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.NEARBY_WIFI_DEVICES}, WIFI_PERMISSION);
+            return;
+        }
+        WifiManager wifi = (WifiManager)getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wifi != null && !wifi.isWifiEnabled()) {
+            status.setText("Turn on Wi-Fi, then return to Dexget to continue pairing.");
+            try {
+                startActivity(new Intent(Settings.Panel.ACTION_WIFI));
+            } catch (Exception ignored) {
+                startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS));
+            }
+            return;
+        }
+        connectDirect(ssid, password, target);
+    }
+
     private void connectDirect(String ssid, String password, String target) {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED)
-            requestPermissions(new String[]{Manifest.permission.NEARBY_WIFI_DEVICES}, 90);
+        if (wifiConnectionRequested) return;
+        wifiConnectionRequested = true;
+        status.setText("Connecting to " + ssid + "…");
         WifiNetworkSpecifier specifier = new WifiNetworkSpecifier.Builder()
                 .setSsid(ssid).setWpa2Passphrase(password).build();
         NetworkRequest request = new NetworkRequest.Builder()
@@ -213,12 +263,15 @@ public class MainActivity extends Activity {
         manager.requestNetwork(request, new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) {
                 directNetwork = network;
+                wifiConnectionRequested = false;
+                pendingSsid = pendingPassword = pendingTarget = null;
                 endpoint = target.endsWith("/") ? target : target + "/";
                 prefs.edit().putString("endpoint", endpoint).apply();
                 runOnUiThread(() -> { renderPairing(); refreshFiles(); });
             }
             @Override public void onUnavailable() {
-                runOnUiThread(() -> status.setText("Direct connection was not available."));
+                wifiConnectionRequested = false;
+                runOnUiThread(() -> status.setText("Connection was not approved or the network was unavailable."));
             }
         });
     }

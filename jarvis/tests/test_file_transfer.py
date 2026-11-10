@@ -4,7 +4,23 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit, urlunsplit
 
-from jarvis.file_transfer import TransferServer
+from jarvis.file_transfer import TransferServer, pairing_payload, parse_wifi_credentials
+
+
+def test_wifi_pairing_payload_contains_endpoint_and_credentials():
+    payload = pairing_payload(
+        "http://192.168.1.5:8000/token/", ("Home WiFi", "secret pass"))
+    assert payload.startswith("dexget://pair?")
+    assert "endpoint=http%3A%2F%2F192.168.1.5%3A8000%2Ftoken%2F" in payload
+    assert "ssid=Home+WiFi" in payload
+    assert "password=secret+pass" in payload
+
+
+def test_parse_wifi_credentials_from_netsh_output():
+    assert parse_wifi_credentials(
+        "    SSID                   : HomeFiber_5Ghz\n",
+        "    Key Content            : correct horse battery staple\n",
+    ) == ("HomeFiber_5Ghz", "correct horse battery staple")
 
 
 def test_transfer_server_requires_token_and_moves_files_both_ways(tmp_path):
