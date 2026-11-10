@@ -875,13 +875,30 @@ class LocalSearchWorker(QThread):
             pythoncom.CoUninitialize()
 
     @staticmethod
-    def _query_windows_index(connection, query):
-        terms = [part for part in query.split() if part][:5]
+    def _parse_search_scope(query):
+        """Return an optional drive scope and path-aware search terms."""
+        parts = [part for part in str(query).split() if part]
+        drive = None
+        if parts and parts[0].startswith(":"):
+            scope = parts.pop(0)[1:]
+            if len(scope) == 1 and scope.isalpha():
+                drive = scope.upper()
+            elif scope:
+                parts.insert(0, scope)
+        return drive, parts[:5]
+
+    @classmethod
+    def _query_windows_index(cls, connection, query):
+        drive, terms = cls._parse_search_scope(query)
         clauses = []
         for term in terms:
             escaped = term.replace("'", "''").replace("%", "[%]")
-            clauses.append(f"System.FileName LIKE '%{escaped}%'")
-        where = " AND ".join(clauses) or "1=0"
+            clauses.append(
+                f"(System.FileName LIKE '%{escaped}%' OR "
+                f"System.ItemPathDisplay LIKE '%{escaped}%')")
+        if drive:
+            clauses.append(f"System.ItemPathDisplay LIKE '{drive}:\\%'")
+        where = " AND ".join(clauses) or "System.ItemPathDisplay IS NOT NULL"
         sql = (
             "SELECT TOP 12 System.ItemPathDisplay, System.FileName, "
             "System.ItemTypeText FROM SYSTEMINDEX WHERE " + where)
@@ -935,14 +952,18 @@ class LocalSearchWorker(QThread):
     def _query_drive_catalog(self, query):
         if self._drive_catalog is None:
             self._drive_catalog = self._build_drive_catalog()
-        terms = [part.casefold() for part in query.split() if part]
+        drive, raw_terms = self._parse_search_scope(query)
+        terms = [part.casefold() for part in raw_terms]
         matches = []
         for path, name, kind in self._drive_catalog:
-            folded = name.casefold()
+            if drive and not os.path.normcase(path).startswith(
+                    os.path.normcase(f"{drive}:\\")):
+                continue
+            folded = path.casefold()
             if all(term in folded for term in terms):
                 matches.append({"path": path, "name": name, "kind": kind})
         matches.sort(key=lambda item: (
-            not item["name"].casefold().startswith(terms[0] if terms else ""),
+            not item["name"].casefold().startswith(terms[-1] if terms else ""),
             len(item["name"]), item["name"].casefold()))
         return matches[:12]
 
@@ -1819,7 +1840,7 @@ class JarvisWidget(QWidget):
         search_layout.setContentsMargins(0, 0, 0, 0)
         self.dashboard_search_entry = QLineEdit()
         self.dashboard_search_entry.setPlaceholderText(
-            "Search files, folders, apps and videos — use ask: for Dexget")
+            "Search this PC — :D, :C, :Movies • ask: Dexget")
         self.dashboard_search_entry.returnPressed.connect(self._run_dashboard_search)
         self._local_search_debounce = QTimer(self)
         self._local_search_debounce.setSingleShot(True)

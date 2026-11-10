@@ -120,6 +120,24 @@ def test_local_search_fallback_finds_items_outside_windows_index(tmp_path):
     assert app_results[0]["kind"] == "Application"
 
 
+def test_local_search_scope_supports_drive_and_folder_shortcuts():
+    worker = LocalSearchWorker()
+    worker._drive_catalog = [
+        (r"D:\Movies\Action\film.mp4", "film.mp4", "Video"),
+        (r"D:\Projects\MoviesApp.exe", "MoviesApp.exe", "Application"),
+        (r"C:\Users\Ashwin\Movies\clip.mp4", "clip.mp4", "Video"),
+    ]
+
+    drive_results = worker._query_drive_catalog(":D Movies")
+    folder_results = worker._query_drive_catalog(":Movies")
+
+    assert len(drive_results) == 2
+    assert all(item["path"].startswith("D:") for item in drive_results)
+    assert len(folder_results) == 3
+    assert LocalSearchWorker._parse_search_scope(":C videos") == (
+        "C", ["videos"])
+
+
 def test_widget_text_mode_and_confirmation_without_voice():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:
