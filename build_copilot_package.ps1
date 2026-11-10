@@ -54,7 +54,7 @@ $manifest = @"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10">
 
-  <Identity Name="JarvisAI" Publisher="CN=JarvisDev" Version="1.0.131.0" ProcessorArchitecture="$packageArch"/>
+  <Identity Name="JarvisAI" Publisher="CN=JarvisDev" Version="1.0.132.0" ProcessorArchitecture="$packageArch"/>
   
   <Properties>
     <DisplayName>JARVIS</DisplayName>
@@ -74,6 +74,7 @@ $manifest = @"
   <Capabilities>
     <uap3:Capability Name="userNotificationListener"/>
     <Capability Name="internetClient"/>
+    <Capability Name="privateNetworkClientServer"/>
     <rescap:Capability Name="runFullTrust"/>
     <DeviceCapability Name="microphone"/>
     <DeviceCapability Name="webcam"/>

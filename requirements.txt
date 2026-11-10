@@ -21,6 +21,7 @@ python-docx
 openpyxl
 python-pptx
 Pillow
+qrcode[pil]>=8,<9
 pytesseract
 selenium>=4.20,<5
 beautifulsoup4>=4.12,<5

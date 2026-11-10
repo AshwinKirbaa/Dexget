@@ -22,6 +22,7 @@ from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap, QAction, QDrag)
 
 import jarvis_integration
+from jarvis.file_transfer import TransferServer
 
 
 class MacroPlaybackWorker(QThread):
@@ -1179,6 +1180,8 @@ class JarvisWidget(QWidget):
         self._default_page_override = False
         self._activity_page = "default"
         self._file_shelf_paths = []
+        self._transfer_server = None
+        self._transfer_received_count = 0
         self._swipe_start_pos = None
         self._global_swipe_start = None
         self._last_page_switch = 0.0
@@ -1688,7 +1691,7 @@ class JarvisWidget(QWidget):
         nav.setSpacing(5)
         self.dashboard_nav_buttons = {}
         nav_items = (("home", "⌂"), ("clipboard", "▣"),
-                     ("tasks", "✓"), ("focus", "◷"))
+                     ("tasks", "✓"), ("focus", "◷"), ("transfer", "⇄"))
         for key, icon in nav_items:
             button = QPushButton(icon)
             button.setCheckable(True)
@@ -1971,6 +1974,48 @@ class JarvisWidget(QWidget):
             self.dashboard_search_results_host)
         search_layout.addWidget(self.dashboard_search_results_scroll, 1)
         self.dashboard_search_results_scroll.hide()
+
+        transfer = page_frame("transfer")
+        transfer_layout = QHBoxLayout(transfer)
+        transfer_layout.setContentsMargins(12, 4, 12, 8)
+        transfer_layout.setSpacing(18)
+        self.transfer_qr = QLabel("Start sharing\nto show QR")
+        self.transfer_qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.transfer_qr.setFixedSize(170, 170)
+        self.transfer_qr.setStyleSheet(
+            "background:#fff; color:#242428; border-radius:18px; font-weight:700;")
+        transfer_layout.addWidget(self.transfer_qr)
+        transfer_details = QVBoxLayout()
+        transfer_title = QLabel("Phone Transfer")
+        transfer_title.setStyleSheet("font-size:20px; font-weight:800;")
+        self.transfer_status = QLabel(
+            "Scan once with your phone camera. No app or cloud required.")
+        self.transfer_status.setWordWrap(True)
+        self.transfer_status.setStyleSheet("color:#a5a6ad;")
+        self.transfer_url = QLineEdit()
+        self.transfer_url.setReadOnly(True)
+        self.transfer_url.setPlaceholderText("Local pairing link")
+        transfer_buttons = QHBoxLayout()
+        self.transfer_start = QPushButton("Start sharing")
+        self.transfer_start.clicked.connect(self._start_phone_transfer)
+        self.transfer_stop = QPushButton("Stop")
+        self.transfer_stop.clicked.connect(self._stop_phone_transfer)
+        self.transfer_stop.setEnabled(False)
+        self.transfer_copy = QPushButton("Copy link")
+        self.transfer_copy.clicked.connect(self._copy_phone_transfer_link)
+        self.transfer_copy.setEnabled(False)
+        transfer_buttons.addWidget(self.transfer_start)
+        transfer_buttons.addWidget(self.transfer_stop)
+        transfer_buttons.addWidget(self.transfer_copy)
+        transfer_details.addWidget(transfer_title)
+        transfer_details.addWidget(self.transfer_status)
+        transfer_details.addWidget(self.transfer_url)
+        transfer_details.addLayout(transfer_buttons)
+        transfer_details.addStretch()
+        transfer_layout.addLayout(transfer_details, 1)
+        self._transfer_poll_timer = QTimer(self)
+        self._transfer_poll_timer.setInterval(700)
+        self._transfer_poll_timer.timeout.connect(self._poll_phone_transfer)
 
         settings = page_frame("settings")
         settings_layout = QGridLayout(settings)
@@ -2500,7 +2545,76 @@ class JarvisWidget(QWidget):
                     "Screenshot copied — select it below to restore it")
         elif name == "search":
             QTimer.singleShot(80, self.dashboard_search_entry.setFocus)
+        elif name == "transfer":
+            count = len(self._file_shelf_paths)
+            if not (self._transfer_server and self._transfer_server.running):
+                self.transfer_status.setText(
+                    f"Ready to share {count} shelf file(s). Phone uploads go to Downloads\\Dexget Transfers.")
         self._keep_feature_open()
+
+    def _start_phone_transfer(self):
+        self._stop_phone_transfer(update_ui=False)
+        upload_dir = os.path.join(
+            os.path.expanduser("~"), "Downloads", "Dexget Transfers")
+        server = TransferServer(self._file_shelf_paths, upload_dir)
+        try:
+            url = server.start()
+            import qrcode
+            qr = qrcode.make(url)
+            buffer = QBuffer()
+            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+            qr.save(buffer, format="PNG")
+            pixmap = QPixmap()
+            pixmap.loadFromData(bytes(buffer.data()), "PNG")
+            buffer.close()
+        except Exception as exc:
+            server.stop()
+            self.transfer_status.setText(f"Could not start sharing: {exc}")
+            return
+        self._transfer_server = server
+        self._transfer_received_count = 0
+        self.transfer_qr.setPixmap(pixmap.scaled(
+            156, 156, Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+        self.transfer_url.setText(url)
+        self.transfer_status.setText(
+            f"Pairing active · {len(server.download_paths)} file(s) available from laptop")
+        self.transfer_start.setText("Restart")
+        self.transfer_stop.setEnabled(True)
+        self.transfer_copy.setEnabled(True)
+        self._transfer_poll_timer.start()
+        self._keep_feature_open()
+
+    def _stop_phone_transfer(self, checked=False, update_ui=True):
+        del checked
+        server = self._transfer_server
+        self._transfer_server = None
+        self._transfer_poll_timer.stop()
+        if server:
+            server.stop()
+        if update_ui and hasattr(self, "transfer_status"):
+            self.transfer_qr.clear()
+            self.transfer_qr.setText("Sharing stopped")
+            self.transfer_url.clear()
+            self.transfer_status.setText("The phone pairing session has ended.")
+            self.transfer_start.setText("Start sharing")
+            self.transfer_stop.setEnabled(False)
+            self.transfer_copy.setEnabled(False)
+
+    def _copy_phone_transfer_link(self):
+        if self.transfer_url.text():
+            QApplication.clipboard().setText(self.transfer_url.text())
+            self.transfer_status.setText("Pairing link copied.")
+
+    def _poll_phone_transfer(self):
+        server = self._transfer_server
+        if not server or not server.running:
+            return
+        received = len(server.received_files)
+        if received != self._transfer_received_count:
+            self._transfer_received_count = received
+            self.transfer_status.setText(
+                f"Received {received} file(s) · saved to Downloads\\Dexget Transfers")
 
     def _refresh_dashboard_system_info(self):
         # Never wait for PowerShell, WinRT, WMI, or audio COM calls on the Qt
@@ -5246,6 +5360,7 @@ class JarvisWidget(QWidget):
         if getattr(self, "_force_closing", False):
             return
         self._stop_macro_activity()
+        self._stop_phone_transfer(update_ui=False)
         self._force_closing = True
         self._closing = True
         if hasattr(self, "tray_icon"):
