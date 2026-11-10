@@ -46,6 +46,7 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int PICK_FILES = 41;
+    private static final int CAMERA_PERMISSION = 42;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private SharedPreferences prefs;
     private TextView status;
@@ -125,11 +126,36 @@ public class MainActivity extends Activity {
     }
 
     private void scanPairing() {
-        IntentIntegrator integrator = new IntentIntegrator(this);
-        integrator.setPrompt("Scan Dexget pairing QR");
-        integrator.setBeepEnabled(false);
-        integrator.setOrientationLocked(false);
-        integrator.initiateScan();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION);
+            return;
+        }
+        launchScanner();
+    }
+
+    private void launchScanner() {
+        try {
+            IntentIntegrator integrator = new IntentIntegrator(this);
+            integrator.setPrompt("Scan Dexget pairing QR");
+            integrator.setBeepEnabled(false);
+            integrator.setOrientationLocked(false);
+            integrator.initiateScan();
+        } catch (Exception error) {
+            status.setText("Camera scanner could not start: " + error.getMessage());
+            Toast.makeText(this, "Unable to open the QR scanner", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != CAMERA_PERMISSION) return;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            launchScanner();
+        } else {
+            status.setText("Camera permission is required to scan the pairing QR.");
+            Toast.makeText(this, "Allow Camera permission to pair", Toast.LENGTH_LONG).show();
+        }
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -154,7 +180,10 @@ public class MainActivity extends Activity {
             Uri uri = Uri.parse(payload);
             String candidate = payload;
             if ("dexget".equalsIgnoreCase(uri.getScheme())) {
-                candidate = URLDecoder.decode(uri.getQueryParameter("endpoint"), "UTF-8");
+                String encodedEndpoint = uri.getQueryParameter("endpoint");
+                if (encodedEndpoint == null || encodedEndpoint.trim().isEmpty())
+                    throw new IllegalArgumentException("Pairing endpoint is missing");
+                candidate = URLDecoder.decode(encodedEndpoint, "UTF-8");
                 String ssid = uri.getQueryParameter("ssid");
                 String password = uri.getQueryParameter("password");
                 if (ssid != null && password != null) connectDirect(ssid, password, candidate);
