@@ -10,7 +10,7 @@ from PyQt6.QtCore import QPoint, Qt
 from jarvis.agent.agent import Agent
 from jarvis.agent.tool_registry import ToolRegistry
 from jarvis.tools.base import RiskLevel, Tool, ToolResult
-from widget import JarvisWidget, JarvisWorker, MediaSessionWorker
+from widget import JarvisWidget, JarvisWorker, MediaSessionWorker, LocalSearchWorker
 
 
 def test_media_worker_prefers_playing_session_over_stale_current_session():
@@ -99,6 +99,25 @@ def test_local_search_results_use_readable_scrollable_rows():
         widget.worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_local_search_fallback_finds_items_outside_windows_index(tmp_path):
+    project = tmp_path / "Dexget Videos"
+    project.mkdir()
+    video = project / "demo recording.mp4"
+    video.write_bytes(b"video")
+    executable = tmp_path / "custom launcher.exe"
+    executable.write_bytes(b"exe")
+
+    worker = LocalSearchWorker()
+    with patch.object(worker, "_fallback_roots", return_value=[str(tmp_path)]):
+        video_results = worker._query_drive_catalog("demo recording")
+        app_results = worker._query_drive_catalog("custom launcher")
+
+    assert video_results[0]["path"] == str(video)
+    assert video_results[0]["kind"] == "Video"
+    assert app_results[0]["path"] == str(executable)
+    assert app_results[0]["kind"] == "Application"
 
 
 def test_widget_text_mode_and_confirmation_without_voice():

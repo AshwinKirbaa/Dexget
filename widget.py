@@ -811,6 +811,7 @@ class LocalSearchWorker(QThread):
         super().__init__()
         self.shutdown_event = threading.Event()
         self.queries = queue.Queue()
+        self._drive_catalog = None
 
     def search(self, query):
         while True:
@@ -830,9 +831,12 @@ class LocalSearchWorker(QThread):
         pythoncom.CoInitialize()
         connection = None
         try:
-            connection = win32com.client.Dispatch("ADODB.Connection")
-            connection.Open(
-                "Provider=Search.CollatorDSO;Extended Properties='Application=Windows'")
+            try:
+                connection = win32com.client.Dispatch("ADODB.Connection")
+                connection.Open(
+                    "Provider=Search.CollatorDSO;Extended Properties='Application=Windows'")
+            except Exception:
+                connection = None
             while not self.shutdown_event.is_set():
                 try:
                     query = self.queries.get(timeout=0.2)
@@ -843,31 +847,25 @@ class LocalSearchWorker(QThread):
                 # Discard superseded keystrokes before querying the index.
                 while not self.queries.empty():
                     query = self.queries.get_nowait()
+                results = []
+                if connection is not None:
+                    try:
+                        results = self._query_windows_index(connection, query)
+                    except Exception:
+                        results = []
+                # Indexed matches appear immediately. A cached direct-drive
+                # pass then supplements drives (commonly D:) excluded from
+                # Windows Search indexing.
+                self.results_ready.emit(query, results)
+                if self.shutdown_event.is_set():
+                    continue
                 try:
-                    terms = [part for part in query.split() if part][:5]
-                    clauses = []
-                    for term in terms:
-                        escaped = term.replace("'", "''").replace("%", "[%]")
-                        clauses.append(f"System.FileName LIKE '%{escaped}%'")
-                    where = " AND ".join(clauses) or "1=0"
-                    sql = (
-                        "SELECT TOP 12 System.ItemPathDisplay, System.FileName, "
-                        "System.ItemTypeText FROM SYSTEMINDEX WHERE " + where)
-                    rows = connection.Execute(sql)[0]
-                    results = []
-                    while not rows.EOF:
-                        path = rows.Fields.Item(0).Value
-                        name = rows.Fields.Item(1).Value
-                        kind = rows.Fields.Item(2).Value
-                        if path and os.path.exists(str(path)):
-                            results.append({"path": str(path),
-                                            "name": str(name or os.path.basename(str(path))),
-                                            "kind": str(kind or "Item")})
-                        rows.MoveNext()
-                    rows.Close()
-                    self.results_ready.emit(query, results)
+                    direct = self._query_drive_catalog(query)
+                    merged = self._merge_results(results, direct)
+                    if merged != results:
+                        self.results_ready.emit(query, merged)
                 except Exception:
-                    self.results_ready.emit(query, [])
+                    pass
         finally:
             if connection is not None:
                 try:
@@ -875,6 +873,89 @@ class LocalSearchWorker(QThread):
                 except Exception:
                     pass
             pythoncom.CoUninitialize()
+
+    @staticmethod
+    def _query_windows_index(connection, query):
+        terms = [part for part in query.split() if part][:5]
+        clauses = []
+        for term in terms:
+            escaped = term.replace("'", "''").replace("%", "[%]")
+            clauses.append(f"System.FileName LIKE '%{escaped}%'")
+        where = " AND ".join(clauses) or "1=0"
+        sql = (
+            "SELECT TOP 12 System.ItemPathDisplay, System.FileName, "
+            "System.ItemTypeText FROM SYSTEMINDEX WHERE " + where)
+        rows = connection.Execute(sql)[0]
+        results = []
+        while not rows.EOF:
+            path = rows.Fields.Item(0).Value
+            name = rows.Fields.Item(1).Value
+            kind = rows.Fields.Item(2).Value
+            if path and os.path.exists(str(path)):
+                results.append({"path": str(path),
+                                "name": str(name or os.path.basename(str(path))),
+                                "kind": str(kind or "Item")})
+            rows.MoveNext()
+        rows.Close()
+        return results
+
+    @staticmethod
+    def _fallback_roots():
+        configured = os.getenv("JARVIS_SEARCH_DRIVES", "D:\\")
+        return [root.strip() for root in configured.split(";")
+                if root.strip() and os.path.exists(root.strip())]
+
+    def _build_drive_catalog(self):
+        catalog = []
+        ignored = {"$recycle.bin", "system volume information", ".git",
+                   "node_modules", "__pycache__", ".pytest_cache"}
+        for root in self._fallback_roots():
+            for current, directories, files in os.walk(root):
+                if self.shutdown_event.is_set():
+                    return catalog
+                directories[:] = [name for name in directories
+                                  if name.casefold() not in ignored]
+                for name in directories:
+                    catalog.append((os.path.join(current, name), name, "Folder"))
+                for name in files:
+                    path = os.path.join(current, name)
+                    extension = os.path.splitext(name)[1].lower()
+                    kind = {
+                        ".exe": "Application", ".lnk": "Shortcut",
+                        ".mp4": "Video", ".mkv": "Video", ".mov": "Video",
+                        ".avi": "Video", ".webm": "Video",
+                    }.get(extension, (extension[1:].upper() + " file") if extension else "File")
+                    catalog.append((path, name, kind))
+                # Bound memory on unusually large data drives while retaining
+                # enough entries for normal personal/project storage.
+                if len(catalog) >= 300_000:
+                    return catalog
+        return catalog
+
+    def _query_drive_catalog(self, query):
+        if self._drive_catalog is None:
+            self._drive_catalog = self._build_drive_catalog()
+        terms = [part.casefold() for part in query.split() if part]
+        matches = []
+        for path, name, kind in self._drive_catalog:
+            folded = name.casefold()
+            if all(term in folded for term in terms):
+                matches.append({"path": path, "name": name, "kind": kind})
+        matches.sort(key=lambda item: (
+            not item["name"].casefold().startswith(terms[0] if terms else ""),
+            len(item["name"]), item["name"].casefold()))
+        return matches[:12]
+
+    @staticmethod
+    def _merge_results(indexed, direct):
+        merged = []
+        seen = set()
+        for item in list(direct) + list(indexed):
+            key = os.path.normcase(os.path.normpath(item["path"]))
+            if key not in seen:
+                seen.add(key)
+                merged.append(item)
+        return merged[:12]
 
 class MessageWidget(QWidget):
     def __init__(self, role, text):
