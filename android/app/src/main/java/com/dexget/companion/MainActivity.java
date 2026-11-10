@@ -137,6 +137,7 @@ public class MainActivity extends Activity {
     private void launchScanner() {
         try {
             IntentIntegrator integrator = new IntentIntegrator(this);
+            integrator.setCaptureActivity(ScannerActivity.class);
             integrator.setPrompt("Scan Dexget pairing QR");
             integrator.setBeepEnabled(false);
             integrator.setOrientationLocked(false);
