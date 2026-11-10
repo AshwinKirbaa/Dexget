@@ -802,6 +802,80 @@ class MediaSessionWorker(QThread):
     def shutdown(self):
         self.shutdown_event.set()
 
+
+class LocalSearchWorker(QThread):
+    """Query the Windows Search index without blocking the island UI."""
+    results_ready = pyqtSignal(str, object)
+
+    def __init__(self):
+        super().__init__()
+        self.shutdown_event = threading.Event()
+        self.queries = queue.Queue()
+
+    def search(self, query):
+        while True:
+            try:
+                self.queries.get_nowait()
+            except queue.Empty:
+                break
+        self.queries.put(str(query))
+
+    def shutdown(self):
+        self.shutdown_event.set()
+        self.queries.put("")
+
+    def run(self):
+        import pythoncom
+        import win32com.client
+        pythoncom.CoInitialize()
+        connection = None
+        try:
+            connection = win32com.client.Dispatch("ADODB.Connection")
+            connection.Open(
+                "Provider=Search.CollatorDSO;Extended Properties='Application=Windows'")
+            while not self.shutdown_event.is_set():
+                try:
+                    query = self.queries.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                if not query or self.shutdown_event.is_set():
+                    continue
+                # Discard superseded keystrokes before querying the index.
+                while not self.queries.empty():
+                    query = self.queries.get_nowait()
+                try:
+                    terms = [part for part in query.split() if part][:5]
+                    clauses = []
+                    for term in terms:
+                        escaped = term.replace("'", "''").replace("%", "[%]")
+                        clauses.append(f"System.FileName LIKE '%{escaped}%'")
+                    where = " AND ".join(clauses) or "1=0"
+                    sql = (
+                        "SELECT TOP 12 System.ItemPathDisplay, System.FileName, "
+                        "System.ItemTypeText FROM SYSTEMINDEX WHERE " + where)
+                    rows = connection.Execute(sql)[0]
+                    results = []
+                    while not rows.EOF:
+                        path = rows.Fields.Item(0).Value
+                        name = rows.Fields.Item(1).Value
+                        kind = rows.Fields.Item(2).Value
+                        if path and os.path.exists(str(path)):
+                            results.append({"path": str(path),
+                                            "name": str(name or os.path.basename(str(path))),
+                                            "kind": str(kind or "Item")})
+                        rows.MoveNext()
+                    rows.Close()
+                    self.results_ready.emit(query, results)
+                except Exception:
+                    self.results_ready.emit(query, [])
+        finally:
+            if connection is not None:
+                try:
+                    connection.Close()
+                except Exception:
+                    pass
+            pythoncom.CoUninitialize()
+
 class MessageWidget(QWidget):
     def __init__(self, role, text):
         super().__init__()
@@ -905,6 +979,7 @@ class JarvisWidget(QWidget):
         self._assistant_state = "Idle"
         self._assistant_subtitle = "Ready"
         self._dashboard_search_pending = False
+        self._local_search_paths = []
         self._last_media_key = None
         self._pulse_phase = False
         self._charging_active = False
@@ -993,6 +1068,9 @@ class JarvisWidget(QWidget):
         self._countdown_timer.setInterval(200)
         self._countdown_timer.timeout.connect(self._tick_countdown)
         self.initUI()
+        self.local_search_worker = LocalSearchWorker()
+        self.local_search_worker.results_ready.connect(
+            self._show_local_search_results)
         self._init_system_tray()
         self._update_default_status()
         self._sync_compact_surface()
@@ -1659,13 +1737,27 @@ class JarvisWidget(QWidget):
         search_layout = QVBoxLayout(search)
         search_layout.setContentsMargins(0, 0, 0, 0)
         self.dashboard_search_entry = QLineEdit()
-        self.dashboard_search_entry.setPlaceholderText("Search, calculate, or ask Dexget")
+        self.dashboard_search_entry.setPlaceholderText(
+            "Search files, folders, apps and videos — use ask: for Dexget")
         self.dashboard_search_entry.returnPressed.connect(self._run_dashboard_search)
+        self._local_search_debounce = QTimer(self)
+        self._local_search_debounce.setSingleShot(True)
+        self._local_search_debounce.setInterval(180)
+        self._local_search_debounce.timeout.connect(self._queue_local_search)
+        self.dashboard_search_entry.textChanged.connect(
+            lambda: self._local_search_debounce.start())
         search_layout.addWidget(self.dashboard_search_entry)
-        self.dashboard_search_result = QLabel("Type a calculation or search query")
+        self.dashboard_search_result = QLabel(
+            "Start typing to find indexed items instantly")
         self.dashboard_search_result.setStyleSheet(
             "background:#19191c; border-radius:12px; padding:14px; font-size:14px;")
         search_layout.addWidget(self.dashboard_search_result)
+        self.dashboard_search_results_host = QWidget()
+        self.dashboard_search_results_layout = QVBoxLayout(
+            self.dashboard_search_results_host)
+        self.dashboard_search_results_layout.setContentsMargins(0, 0, 0, 0)
+        self.dashboard_search_results_layout.setSpacing(3)
+        search_layout.addWidget(self.dashboard_search_results_host)
         search_layout.addStretch()
 
         settings = page_frame("settings")
@@ -2683,6 +2775,61 @@ class JarvisWidget(QWidget):
     def _start_focus_timer(self):
         self.start_timer(self._focus_minutes * 60)
 
+    def _clear_local_search_results(self):
+        self._local_search_paths = []
+        while self.dashboard_search_results_layout.count():
+            item = self.dashboard_search_results_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _queue_local_search(self):
+        query = self.dashboard_search_entry.text().strip()
+        lowered = query.casefold()
+        if (not query or lowered.startswith(("ask:", "dexget:", "web:",
+                                             "search web for "))):
+            self._clear_local_search_results()
+            return
+        self.dashboard_search_result.setText("Searching this PC…")
+        if not self.local_search_worker.isRunning():
+            self.local_search_worker.start()
+        self.local_search_worker.search(query)
+
+    def _show_local_search_results(self, query, results):
+        if query != self.dashboard_search_entry.text().strip():
+            return
+        self._clear_local_search_results()
+        self._local_search_paths = [item["path"] for item in results]
+        if not results:
+            self.dashboard_search_result.setText(
+                "No indexed items found. Use ask: for Dexget or web: for the web.")
+            return
+        self.dashboard_search_result.setText(
+            f"{len(results)} result{'s' if len(results) != 1 else ''} — press Enter to open the first")
+        icon_provider = QFileIconProvider()
+        for result in results[:5]:
+            path = result["path"]
+            button = QPushButton(f'{result["name"]}    ·    {result["kind"]}')
+            button.setIcon(icon_provider.icon(QFileInfo(path)))
+            button.setIconSize(QSize(22, 22))
+            button.setToolTip(path)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setStyleSheet(
+                "QPushButton { text-align:left; background:#17181b; color:white; "
+                "border-radius:9px; padding:7px 10px; } "
+                "QPushButton:hover { background:#292b30; }")
+            button.clicked.connect(
+                lambda checked=False, selected=path: self._open_local_search_result(selected))
+            self.dashboard_search_results_layout.addWidget(button)
+
+    def _open_local_search_result(self, path):
+        try:
+            os.startfile(path)
+            self.dashboard_search_result.setText(f"Opened {os.path.basename(path) or path}")
+            self._auto_collapse_feature()
+        except OSError as exc:
+            self.dashboard_search_result.setText(f"Could not open item: {exc}")
+
     def _run_dashboard_search(self):
         query = self.dashboard_search_entry.text().strip()
         if not query:
@@ -2701,6 +2848,21 @@ class JarvisWidget(QWidget):
                     lambda event, q=web_query: self._launch_uri(
                         "https://www.google.com/search?q=" +
                         urllib.parse.quote_plus(q)))
+            return
+        ask_prefix = next((prefix for prefix in ("ask:", "dexget:")
+                           if lowered.startswith(prefix)), None)
+        if ask_prefix:
+            question = query[len(ask_prefix):].strip()
+            if not question:
+                self.dashboard_search_result.setText("Type a question after ask:")
+                return
+            self._clear_local_search_results()
+            self._dashboard_search_pending = True
+            self.dashboard_search_result.setText("Asking Dexget…")
+            if not self.worker.submit_text(question, display_text=question):
+                self._dashboard_search_pending = False
+                self.dashboard_search_result.setText(
+                    "Dexget is busy. Try again after the current task finishes.")
             return
         try:
             import ast
@@ -2723,14 +2885,13 @@ class JarvisWidget(QWidget):
                     return operators[type(node.op)](evaluate(node.operand))
                 raise ValueError
             result = evaluate(ast.parse(query, mode="eval"))
+            self._clear_local_search_results()
             self.dashboard_search_result.setText(f"{result:g}\n{query}")
         except Exception:
-            self._dashboard_search_pending = True
-            self.dashboard_search_result.setText("Asking Dexget…")
-            if not self.worker.submit_text(query, display_text=query):
-                self._dashboard_search_pending = False
-                self.dashboard_search_result.setText(
-                    "Dexget is busy. Try again after the current task finishes.")
+            if self._local_search_paths:
+                self._open_local_search_result(self._local_search_paths[0])
+            else:
+                self._queue_local_search()
 
     def _compact_size(self):
         if self._file_shelf_paths and self._displaying_default_page():
@@ -4689,6 +4850,10 @@ class JarvisWidget(QWidget):
         if hasattr(self, "media_worker") and self.media_worker.isRunning():
             self.media_worker.shutdown()
             self.media_worker.wait(2000)
+        if (hasattr(self, "local_search_worker") and
+                self.local_search_worker.isRunning()):
+            self.local_search_worker.shutdown()
+            self.local_search_worker.wait(2000)
         if self.screen_assist_worker and self.screen_assist_worker.isRunning():
             self.screen_assist_worker.requestInterruption()
             self.screen_assist_worker.wait(1500)

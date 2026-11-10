@@ -48,7 +48,7 @@ def test_dashboard_question_is_sent_to_dexget_and_answer_stays_in_search_page():
             ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
         widget = JarvisWidget()
     try:
-        widget.dashboard_search_entry.setText("Why is the sky blue?")
+        widget.dashboard_search_entry.setText("ask: Why is the sky blue?")
         with patch.object(widget.worker, "submit_text", return_value=True) as submit:
             widget._run_dashboard_search()
         submit.assert_called_once_with(
