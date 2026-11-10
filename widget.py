@@ -2979,12 +2979,19 @@ class JarvisWidget(QWidget):
             old_button.deleteLater()
             self._clipboard_history.pop(existing_index)
 
+        row_widget = QFrame()
+        row_widget.setFixedHeight(50)
+        row_widget.setStyleSheet(
+            "QFrame { background:#1b1b1e; border-radius:10px; }")
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(4, 3, 7, 3)
+        row_layout.setSpacing(5)
         button = QPushButton()
-        button.setFixedHeight(48)
+        button.setFixedHeight(44)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setStyleSheet(
             "QPushButton { background:#1b1b1e; text-align:left; padding:7px 12px; "
-            "border-radius:10px; } QPushButton:hover { background:#29292e; }")
+            "border-radius:8px; } QPushButton:hover { background:#29292e; }")
         if entry.get("kind") == "image":
             path = str(entry.get("path", ""))
             pixmap = QPixmap(path)
@@ -3000,8 +3007,19 @@ class JarvisWidget(QWidget):
             button.setToolTip(text_value)
         button.clicked.connect(
             lambda checked=False, value=dict(entry): self._restore_clipboard_entry(value))
-        self.dashboard_clipboard_list.insertWidget(0, button)
-        self.dashboard_clipboard_buttons.insert(0, button)
+        copy_button = QPushButton("Copy")
+        copy_button.setFixedSize(58, 32)
+        copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_button.setStyleSheet(
+            "QPushButton { background:#303036; color:white; border-radius:16px; "
+            "font-weight:600; padding:0; text-align:center; } "
+            "QPushButton:hover { background:#45454d; }")
+        copy_button.clicked.connect(
+            lambda checked=False, value=dict(entry): self._restore_clipboard_entry(value))
+        row_layout.addWidget(button, 1)
+        row_layout.addWidget(copy_button)
+        self.dashboard_clipboard_list.insertWidget(0, row_widget)
+        self.dashboard_clipboard_buttons.insert(0, row_widget)
         self._clipboard_history.insert(0, dict(entry))
         while len(self._clipboard_history) > 20:
             stale_button = self.dashboard_clipboard_buttons.pop()

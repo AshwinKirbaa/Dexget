@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QPushButton
 from PyQt6.QtCore import QPoint, Qt, QSettings
 from PyQt6.QtGui import QPixmap
 from jarvis.agent.agent import Agent
@@ -177,6 +177,9 @@ def test_clipboard_history_captures_text_and_screenshots(tmp_path):
             app.processEvents()
             assert widget._clipboard_history[0]["kind"] == "image"
             assert os.path.isfile(widget._clipboard_history[0]["path"])
+            latest_row = widget.dashboard_clipboard_buttons[0]
+            copy_buttons = latest_row.findChildren(QPushButton)
+            assert any(button.text() == "Copy" for button in copy_buttons)
             with open(widget._clipboard_history_file(), encoding="utf-8") as handle:
                 stored = json.load(handle)
             assert {entry["kind"] for entry in stored} == {"text", "image"}
