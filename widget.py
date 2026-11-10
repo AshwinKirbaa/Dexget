@@ -1756,9 +1756,22 @@ class JarvisWidget(QWidget):
         self.dashboard_search_results_layout = QVBoxLayout(
             self.dashboard_search_results_host)
         self.dashboard_search_results_layout.setContentsMargins(0, 0, 0, 0)
-        self.dashboard_search_results_layout.setSpacing(3)
-        search_layout.addWidget(self.dashboard_search_results_host)
-        search_layout.addStretch()
+        self.dashboard_search_results_layout.setSpacing(5)
+        self.dashboard_search_results_layout.addStretch()
+        self.dashboard_search_results_scroll = QScrollArea()
+        self.dashboard_search_results_scroll.setWidgetResizable(True)
+        self.dashboard_search_results_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.dashboard_search_results_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.dashboard_search_results_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.dashboard_search_results_scroll.setStyleSheet(
+            "QScrollArea { background:transparent; border:none; } "
+            "QScrollBar:vertical { background:transparent; width:5px; } "
+            "QScrollBar::handle:vertical { background:#464950; border-radius:2px; }")
+        self.dashboard_search_results_scroll.setWidget(
+            self.dashboard_search_results_host)
+        search_layout.addWidget(self.dashboard_search_results_scroll, 1)
 
         settings = page_frame("settings")
         settings_layout = QGridLayout(settings)
@@ -2782,6 +2795,7 @@ class JarvisWidget(QWidget):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        self.dashboard_search_results_layout.addStretch()
 
     def _queue_local_search(self):
         query = self.dashboard_search_entry.text().strip()
@@ -2807,11 +2821,12 @@ class JarvisWidget(QWidget):
         self.dashboard_search_result.setText(
             f"{len(results)} result{'s' if len(results) != 1 else ''} — press Enter to open the first")
         icon_provider = QFileIconProvider()
-        for result in results[:5]:
+        for index, result in enumerate(results[:8]):
             path = result["path"]
             button = QPushButton(f'{result["name"]}    ·    {result["kind"]}')
             button.setIcon(icon_provider.icon(QFileInfo(path)))
             button.setIconSize(QSize(22, 22))
+            button.setFixedHeight(38)
             button.setToolTip(path)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setStyleSheet(
@@ -2820,7 +2835,7 @@ class JarvisWidget(QWidget):
                 "QPushButton:hover { background:#292b30; }")
             button.clicked.connect(
                 lambda checked=False, selected=path: self._open_local_search_result(selected))
-            self.dashboard_search_results_layout.addWidget(button)
+            self.dashboard_search_results_layout.insertWidget(index, button)
 
     def _open_local_search_result(self, path):
         try:

@@ -6,7 +6,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QPoint
+from PyQt6.QtCore import QPoint, Qt
 from jarvis.agent.agent import Agent
 from jarvis.agent.tool_registry import ToolRegistry
 from jarvis.tools.base import RiskLevel, Tool, ToolResult
@@ -59,6 +59,39 @@ def test_dashboard_question_is_sent_to_dexget_and_answer_stays_in_search_page():
         widget.add_message("Jarvis", "Because shorter blue wavelengths scatter more.")
         assert not widget._dashboard_search_pending
         assert "blue wavelengths" in widget.dashboard_search_result.text()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
+def test_local_search_results_use_readable_scrollable_rows():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(
+            ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.dashboard_search_entry.setText("brave")
+        results = [
+            {"path": f"C:/Apps/Brave{i}.exe", "name": f"Brave Browser {i}",
+             "kind": "Application"}
+            for i in range(8)
+        ]
+        widget._show_local_search_results("brave", results)
+        rows = [
+            widget.dashboard_search_results_layout.itemAt(i).widget()
+            for i in range(widget.dashboard_search_results_layout.count())
+            if widget.dashboard_search_results_layout.itemAt(i).widget() is not None
+        ]
+        assert len(rows) == 8
+        assert all(row.height() == 38 for row in rows)
+        assert widget.dashboard_search_results_scroll.widgetResizable()
+        assert widget.dashboard_search_results_scroll.verticalScrollBarPolicy() == \
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
     finally:
         widget.media_worker.shutdown()
         widget.media_worker.wait(2000)
