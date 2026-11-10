@@ -856,14 +856,14 @@ class LocalSearchWorker(QThread):
                 # Indexed matches appear immediately. A cached direct-drive
                 # pass then supplements drives (commonly D:) excluded from
                 # Windows Search indexing.
-                self.results_ready.emit(query, results)
+                if results:
+                    self.results_ready.emit(query, results)
                 if self.shutdown_event.is_set():
                     continue
                 try:
                     direct = self._query_drive_catalog(query)
                     merged = self._merge_results(results, direct)
-                    if merged != results:
-                        self.results_ready.emit(query, merged)
+                    self.results_ready.emit(query, merged)
                 except Exception:
                     pass
         finally:
@@ -885,7 +885,20 @@ class LocalSearchWorker(QThread):
                 drive = scope.upper()
             elif scope:
                 parts.insert(0, scope)
-        return drive, parts[:5]
+        # Also accept natural suffix forms such as Movies:D and D: Movies.
+        normalized = []
+        for part in parts:
+            if len(part) == 2 and part[0].isalpha() and part[1] == ":":
+                drive = part[0].upper()
+                continue
+            if len(part) > 2 and part[-2] == ":" and part[-1].isalpha():
+                drive = part[-1].upper()
+                remainder = part[:-2]
+                if remainder:
+                    normalized.append(remainder)
+                continue
+            normalized.append(part)
+        return drive, normalized[:5]
 
     @classmethod
     def _query_windows_index(cls, connection, query):
@@ -1855,6 +1868,7 @@ class JarvisWidget(QWidget):
             "background:#19191c; border-radius:12px; padding:14px; font-size:14px;")
         search_layout.addWidget(self.dashboard_search_result)
         self.dashboard_search_results_host = QWidget()
+        self.dashboard_search_results_host.setStyleSheet("background:transparent;")
         self.dashboard_search_results_layout = QVBoxLayout(
             self.dashboard_search_results_host)
         self.dashboard_search_results_layout.setContentsMargins(0, 0, 0, 0)
@@ -1874,6 +1888,7 @@ class JarvisWidget(QWidget):
         self.dashboard_search_results_scroll.setWidget(
             self.dashboard_search_results_host)
         search_layout.addWidget(self.dashboard_search_results_scroll, 1)
+        self.dashboard_search_results_scroll.hide()
 
         settings = page_frame("settings")
         settings_layout = QGridLayout(settings)
@@ -2892,6 +2907,7 @@ class JarvisWidget(QWidget):
 
     def _clear_local_search_results(self):
         self._local_search_paths = []
+        self.dashboard_search_results_scroll.hide()
         while self.dashboard_search_results_layout.count():
             item = self.dashboard_search_results_layout.takeAt(0)
             widget = item.widget()
@@ -2918,8 +2934,9 @@ class JarvisWidget(QWidget):
         self._local_search_paths = [item["path"] for item in results]
         if not results:
             self.dashboard_search_result.setText(
-                "No indexed items found. Use ask: for Dexget or web: for the web.")
+                "No matching items found. Try :D, :C, :Movies or Movies:D.")
             return
+        self.dashboard_search_results_scroll.show()
         self.dashboard_search_result.setText(
             f"{len(results)} result{'s' if len(results) != 1 else ''} — press Enter to open the first")
         icon_provider = QFileIconProvider()

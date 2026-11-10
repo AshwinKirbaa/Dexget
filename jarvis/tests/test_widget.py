@@ -92,6 +92,8 @@ def test_local_search_results_use_readable_scrollable_rows():
         assert widget.dashboard_search_results_scroll.widgetResizable()
         assert widget.dashboard_search_results_scroll.verticalScrollBarPolicy() == \
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        widget._show_local_search_results("brave", [])
+        assert widget.dashboard_search_results_scroll.isHidden()
     finally:
         widget.media_worker.shutdown()
         widget.media_worker.wait(2000)
@@ -136,6 +138,10 @@ def test_local_search_scope_supports_drive_and_folder_shortcuts():
     assert len(folder_results) == 3
     assert LocalSearchWorker._parse_search_scope(":C videos") == (
         "C", ["videos"])
+    assert LocalSearchWorker._parse_search_scope("Movies:D") == (
+        "D", ["Movies"])
+    assert LocalSearchWorker._parse_search_scope("C: Videos lecture") == (
+        "C", ["Videos", "lecture"])
 
 
 def test_widget_text_mode_and_confirmation_without_voice():
