@@ -202,9 +202,21 @@ def test_clipboard_history_captures_text_and_screenshots(tmp_path):
                 Qt.ScrollBarPolicy.ScrollBarAsNeeded
             pin_button.click()
             assert widget._clipboard_history[0]["pinned"] is True
+
+            QApplication.clipboard().setText("newer unpinned item")
+            app.processEvents()
+            assert widget._clipboard_history[0]["pinned"] is True
+            assert widget._clipboard_history[1]["text"] == "newer unpinned item"
+            assert widget.dashboard_clipboard_clear.text() == "Clear"
+            assert widget.findChild(
+                QPushButton, "clipboardClearButton") is not None
+            widget.dashboard_clipboard_clear.click()
+            app.processEvents()
+            assert len(widget._clipboard_history) == 1
+            assert widget._clipboard_history[0]["pinned"] is True
             with open(widget._clipboard_history_file(), encoding="utf-8") as handle:
                 stored = json.load(handle)
-            assert {entry["kind"] for entry in stored} == {"text", "image"}
+            assert len(stored) == 1
             assert stored[0]["pinned"] is True
         finally:
             widget.media_worker.shutdown()

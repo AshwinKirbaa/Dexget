@@ -1876,9 +1876,13 @@ class JarvisWidget(QWidget):
         clipboard_header = QHBoxLayout()
         clipboard_header.addWidget(QLabel("Clipboard history"))
         clipboard_header.addStretch()
-        pin_current = QPushButton("Pin current clipboard")
-        pin_current.clicked.connect(self._pin_current_clipboard)
-        clipboard_header.addWidget(pin_current)
+        self.dashboard_clipboard_clear = QPushButton("Clear")
+        self.dashboard_clipboard_clear.setObjectName("clipboardClearButton")
+        self.dashboard_clipboard_clear.setToolTip(
+            "Clear clipboard history except pinned items")
+        self.dashboard_clipboard_clear.clicked.connect(
+            self._clear_unpinned_clipboard_history)
+        clipboard_header.addWidget(self.dashboard_clipboard_clear)
         clipboard_layout.addLayout(clipboard_header)
         self.dashboard_clipboard_host = QWidget()
         self.dashboard_clipboard_host.setStyleSheet("background:transparent;")
@@ -2609,7 +2613,9 @@ class JarvisWidget(QWidget):
         if not history:
             legacy = settings.value("dashboard/clipboard", [], type=list) or []
             history = [{"kind": "text", "text": str(value)} for value in legacy]
-        for entry in history[:20]:
+        # Entries are inserted at the front of their pinned/unpinned section.
+        # Loading in reverse preserves the saved order and keeps pins first.
+        for entry in reversed(history[:20]):
             if not isinstance(entry, dict):
                 continue
             entry["pinned"] = bool(entry.get("pinned", False))
@@ -2983,9 +2989,6 @@ class JarvisWidget(QWidget):
                 "Assistant", f"Could not run {entry.get('label', 'launcher')}: {exc}")
         self._keep_feature_open()
 
-    def _pin_current_clipboard(self):
-        self._capture_clipboard_change(force=True)
-
     def _append_clipboard_pin(self, text_value, persist=True):
         self._append_clipboard_entry(
             {"kind": "text", "text": str(text_value)}, persist=persist)
@@ -3085,9 +3088,14 @@ class JarvisWidget(QWidget):
         row_layout.addWidget(button, 1)
         row_layout.addWidget(pin_button)
         row_layout.addWidget(copy_button)
-        self.dashboard_clipboard_list.insertWidget(0, row_widget)
-        self.dashboard_clipboard_buttons.insert(0, row_widget)
-        self._clipboard_history.insert(0, dict(entry))
+        if entry.get("pinned", False):
+            insert_index = 0
+        else:
+            insert_index = sum(
+                1 for item in self._clipboard_history if item.get("pinned"))
+        self.dashboard_clipboard_list.insertWidget(insert_index, row_widget)
+        self.dashboard_clipboard_buttons.insert(insert_index, row_widget)
+        self._clipboard_history.insert(insert_index, dict(entry))
         while len(self._clipboard_history) > 20:
             stale_index = next((index for index in range(
                 len(self._clipboard_history) - 1, -1, -1)
@@ -3108,16 +3116,41 @@ class JarvisWidget(QWidget):
         except OSError:
             pass
 
+    def _clear_unpinned_clipboard_history(self):
+        for index in range(len(self._clipboard_history) - 1, -1, -1):
+            if self._clipboard_history[index].get("pinned"):
+                continue
+            row = self.dashboard_clipboard_buttons.pop(index)
+            self.dashboard_clipboard_list.removeWidget(row)
+            row.deleteLater()
+            self._clipboard_history.pop(index)
+        self._save_clipboard_history()
+        self.dashboard_clipboard_entry.clear()
+        self.dashboard_clipboard_entry.setPlaceholderText(
+            "Unpinned clipboard history cleared")
+
     def _toggle_clipboard_pin(self, entry, control):
         key = (entry.get("kind"), entry.get("text") or entry.get("hash") or
                entry.get("path"))
-        for stored in self._clipboard_history:
+        for index, stored in enumerate(self._clipboard_history):
             stored_key = (stored.get("kind"), stored.get("text") or
                           stored.get("hash") or stored.get("path"))
             if stored_key == key:
                 stored["pinned"] = bool(control.isChecked())
                 control.setToolTip("Unpin" if control.isChecked() else "Pin")
                 control.update()
+                row = self.dashboard_clipboard_buttons.pop(index)
+                moved_entry = self._clipboard_history.pop(index)
+                self.dashboard_clipboard_list.removeWidget(row)
+                if moved_entry["pinned"]:
+                    target_index = 0
+                else:
+                    target_index = sum(
+                        1 for item in self._clipboard_history
+                        if item.get("pinned"))
+                self.dashboard_clipboard_buttons.insert(target_index, row)
+                self._clipboard_history.insert(target_index, moved_entry)
+                self.dashboard_clipboard_list.insertWidget(target_index, row)
                 self._save_clipboard_history()
                 break
 
