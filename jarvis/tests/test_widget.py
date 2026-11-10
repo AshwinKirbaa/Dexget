@@ -1,4 +1,5 @@
 import os
+import json
 import threading
 import time
 from unittest.mock import patch
@@ -6,7 +7,8 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint, Qt, QSettings
+from PyQt6.QtGui import QPixmap
 from jarvis.agent.agent import Agent
 from jarvis.agent.tool_registry import ToolRegistry
 from jarvis.tools.base import RiskLevel, Tool, ToolResult
@@ -150,6 +152,42 @@ def test_local_search_scope_supports_drive_and_folder_shortcuts():
         "D", ["Movies"])
     assert LocalSearchWorker._parse_search_scope("C: Videos lecture") == (
         "C", ["Videos", "lecture"])
+
+
+def test_clipboard_history_captures_text_and_screenshots(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    settings = QSettings("Dexget", "DynamicIsland")
+    settings.remove("dashboard/clipboard_history")
+    settings.remove("dashboard/clipboard")
+    settings.sync()
+    with patch.dict(os.environ, {"LOCALAPPDATA": str(tmp_path)}), \
+            patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(
+            ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+        try:
+            QApplication.clipboard().setText("Dexget clipboard test")
+            app.processEvents()
+            assert widget._clipboard_history[0] == {
+                "kind": "text", "text": "Dexget clipboard test"}
+
+            screenshot = QPixmap(40, 24)
+            screenshot.fill(Qt.GlobalColor.red)
+            QApplication.clipboard().setPixmap(screenshot)
+            app.processEvents()
+            assert widget._clipboard_history[0]["kind"] == "image"
+            assert os.path.isfile(widget._clipboard_history[0]["path"])
+            with open(widget._clipboard_history_file(), encoding="utf-8") as handle:
+                stored = json.load(handle)
+            assert {entry["kind"] for entry in stored} == {"text", "image"}
+        finally:
+            widget.media_worker.shutdown()
+            widget.media_worker.wait(2000)
+            widget.worker.shutdown()
+            widget.worker.wait(2000)
+            widget.close()
+            app.processEvents()
+            settings.remove("dashboard/clipboard_history")
 
 
 def test_widget_text_mode_and_confirmation_without_voice():

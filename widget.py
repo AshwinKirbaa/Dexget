@@ -6,6 +6,7 @@ import time
 import os
 import json
 import shutil
+import hashlib
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                         QFrame, QSizePolicy, QGraphicsDropShadowEffect, QInputDialog,
@@ -16,7 +17,7 @@ from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSiz
                           QRect, QPropertyAnimation, QEasingCurve,
                           QParallelAnimationGroup, QVariantAnimation,
                           QRectF, QAbstractAnimation, QSettings, QEvent, QFileInfo,
-                          QMimeData, QUrl)
+                          QMimeData, QUrl, QBuffer, QIODevice)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap, QAction, QDrag)
 
@@ -1829,7 +1830,7 @@ class JarvisWidget(QWidget):
             "Paste from clipboard history or a pinned snippet")
         clipboard_layout.addWidget(self.dashboard_clipboard_entry)
         clipboard_header = QHBoxLayout()
-        clipboard_header.addWidget(QLabel("Pinned"))
+        clipboard_header.addWidget(QLabel("Clipboard history"))
         clipboard_header.addStretch()
         pin_current = QPushButton("Pin current clipboard")
         pin_current.clicked.connect(self._pin_current_clipboard)
@@ -1927,6 +1928,8 @@ class JarvisWidget(QWidget):
         self._focus_minutes = 25
         self._load_dashboard_tasks()
         self._load_pinned_clipboard()
+        QApplication.clipboard().dataChanged.connect(self._capture_clipboard_change)
+        QTimer.singleShot(0, self._capture_clipboard_change)
         self._load_dashboard_launchers()
         # Start on the lightweight summary page; system controls that the user
         # removed are neither shown nor queried.
@@ -2424,8 +2427,11 @@ class JarvisWidget(QWidget):
         if name == "home":
             self._refresh_dashboard_system_info()
         elif name == "clipboard":
-            self.dashboard_clipboard_entry.setText(
-                QApplication.clipboard().text()[:300])
+            clipboard = QApplication.clipboard()
+            self.dashboard_clipboard_entry.setText(clipboard.text()[:300])
+            if clipboard.mimeData().hasImage() and not clipboard.text():
+                self.dashboard_clipboard_entry.setPlaceholderText(
+                    "Screenshot copied — select it below to restore it")
         elif name == "search":
             QTimer.singleShot(80, self.dashboard_search_entry.setFocus)
         self._keep_feature_open()
@@ -2530,10 +2536,32 @@ class JarvisWidget(QWidget):
 
     def _load_pinned_clipboard(self):
         self.dashboard_clipboard_buttons = []
-        values = QSettings("Dexget", "DynamicIsland").value(
-            "dashboard/clipboard", [], type=list) or []
-        for text_value in values:
-            self._append_clipboard_pin(str(text_value), persist=False)
+        self._clipboard_history = []
+        self._last_clipboard_signature = None
+        settings = QSettings("Dexget", "DynamicIsland")
+        try:
+            with open(self._clipboard_history_file(), "r", encoding="utf-8") as handle:
+                history = json.load(handle)
+        except (OSError, TypeError, ValueError):
+            history = []
+        if not history:
+            legacy = settings.value("dashboard/clipboard", [], type=list) or []
+            history = [{"kind": "text", "text": str(value)} for value in legacy]
+        for entry in history[:20]:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("kind") == "text" and str(entry.get("text", "")).strip():
+                self._append_clipboard_entry(entry, persist=False)
+            elif entry.get("kind") == "image" and os.path.isfile(
+                    str(entry.get("path", ""))):
+                self._append_clipboard_entry(entry, persist=False)
+
+    @staticmethod
+    def _clipboard_history_file():
+        data_dir = os.path.join(
+            os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "Dexget")
+        os.makedirs(data_dir, exist_ok=True)
+        return os.path.join(data_dir, "clipboard_history.json")
 
     def _load_dashboard_launchers(self):
         """Populate the home page with fast, user-configurable launch actions."""
@@ -2893,25 +2921,114 @@ class JarvisWidget(QWidget):
         self._keep_feature_open()
 
     def _pin_current_clipboard(self):
-        text_value = QApplication.clipboard().text().strip()
-        if text_value:
-            self._append_clipboard_pin(text_value)
+        self._capture_clipboard_change(force=True)
 
     def _append_clipboard_pin(self, text_value, persist=True):
-        if any(button.property("clipText") == text_value
-               for button in self.dashboard_clipboard_buttons):
+        self._append_clipboard_entry(
+            {"kind": "text", "text": str(text_value)}, persist=persist)
+
+    @staticmethod
+    def _clipboard_image_bytes(pixmap):
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        pixmap.save(buffer, "PNG")
+        data = bytes(buffer.data())
+        buffer.close()
+        return data
+
+    def _capture_clipboard_change(self, force=False):
+        clipboard = QApplication.clipboard()
+        mime = clipboard.mimeData()
+        entry = None
+        signature = None
+        if mime.hasImage():
+            pixmap = clipboard.pixmap()
+            if not pixmap.isNull():
+                image_data = self._clipboard_image_bytes(pixmap)
+                digest = hashlib.sha256(image_data).hexdigest()
+                signature = f"image:{digest}"
+                image_dir = os.path.join(
+                    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                    "Dexget", "Clipboard")
+                os.makedirs(image_dir, exist_ok=True)
+                image_path = os.path.join(image_dir, f"{digest}.png")
+                if not os.path.isfile(image_path):
+                    pixmap.save(image_path, "PNG")
+                entry = {"kind": "image", "path": image_path, "hash": digest}
+        else:
+            text_value = clipboard.text().strip()
+            if text_value:
+                signature = "text:" + hashlib.sha256(
+                    text_value.encode("utf-8", errors="replace")).hexdigest()
+                entry = {"kind": "text", "text": text_value}
+        if entry is None or (not force and signature == self._last_clipboard_signature):
             return
-        button = QPushButton(f"📌  {text_value[:82]}")
-        button.setProperty("clipText", text_value)
-        button.setStyleSheet("background:#1b1b1e; text-align:left; padding:9px 12px;")
+        self._last_clipboard_signature = signature
+        self._append_clipboard_entry(entry)
+
+    def _append_clipboard_entry(self, entry, persist=True):
+        key = (entry.get("kind"), entry.get("text") or entry.get("hash") or
+               entry.get("path"))
+        existing_index = next((index for index, item in enumerate(
+            self._clipboard_history) if (
+                item.get("kind"), item.get("text") or item.get("hash") or
+                item.get("path")) == key), None)
+        if existing_index is not None:
+            old_button = self.dashboard_clipboard_buttons.pop(existing_index)
+            self.dashboard_clipboard_list.removeWidget(old_button)
+            old_button.deleteLater()
+            self._clipboard_history.pop(existing_index)
+
+        button = QPushButton()
+        button.setFixedHeight(48)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet(
+            "QPushButton { background:#1b1b1e; text-align:left; padding:7px 12px; "
+            "border-radius:10px; } QPushButton:hover { background:#29292e; }")
+        if entry.get("kind") == "image":
+            path = str(entry.get("path", ""))
+            pixmap = QPixmap(path)
+            button.setText("  Screenshot")
+            if not pixmap.isNull():
+                button.setIcon(QIcon(pixmap))
+                button.setIconSize(QSize(38, 32))
+            button.setToolTip(path)
+        else:
+            text_value = str(entry.get("text", ""))
+            preview = " ".join(text_value.split())
+            button.setText(f"  {preview[:90]}")
+            button.setToolTip(text_value)
         button.clicked.connect(
-            lambda checked=False, value=text_value: QApplication.clipboard().setText(value))
-        self.dashboard_clipboard_list.addWidget(button)
-        self.dashboard_clipboard_buttons.append(button)
+            lambda checked=False, value=dict(entry): self._restore_clipboard_entry(value))
+        self.dashboard_clipboard_list.insertWidget(0, button)
+        self.dashboard_clipboard_buttons.insert(0, button)
+        self._clipboard_history.insert(0, dict(entry))
+        while len(self._clipboard_history) > 20:
+            stale_button = self.dashboard_clipboard_buttons.pop()
+            self.dashboard_clipboard_list.removeWidget(stale_button)
+            stale_button.deleteLater()
+            self._clipboard_history.pop()
         if persist:
-            QSettings("Dexget", "DynamicIsland").setValue(
-                "dashboard/clipboard",
-                [item.property("clipText") for item in self.dashboard_clipboard_buttons])
+            try:
+                with open(self._clipboard_history_file(), "w", encoding="utf-8") as handle:
+                    json.dump(self._clipboard_history, handle, ensure_ascii=False,
+                              indent=2)
+            except OSError:
+                pass
+
+    def _restore_clipboard_entry(self, entry):
+        clipboard = QApplication.clipboard()
+        if entry.get("kind") == "image":
+            pixmap = QPixmap(str(entry.get("path", "")))
+            if not pixmap.isNull():
+                clipboard.setPixmap(pixmap)
+                self.dashboard_clipboard_entry.clear()
+                self.dashboard_clipboard_entry.setPlaceholderText(
+                    "Screenshot restored to clipboard")
+        else:
+            text_value = str(entry.get("text", ""))
+            clipboard.setText(text_value)
+            self.dashboard_clipboard_entry.setText(text_value[:300])
 
     def _set_focus_minutes(self, minutes):
         self._focus_minutes = int(minutes)
