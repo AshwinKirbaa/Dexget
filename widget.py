@@ -121,6 +121,50 @@ class MediaControlButton(QPushButton):
                 QPointF(cx, cy)))
 
 
+class ClipboardActionButton(QPushButton):
+    """Compact, font-independent copy and pin controls."""
+    def __init__(self, kind):
+        super().__init__()
+        self.kind = kind
+        self.setFixedSize(34, 32)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCheckable(kind == "pin")
+        self.setObjectName(
+            "clipboardCopyButton" if kind == "copy" else "clipboardPinButton")
+        self.setToolTip("Copy" if kind == "copy" else "Pin")
+        self.setStyleSheet(
+            "QPushButton { background:#303036; border:none; border-radius:9px; } "
+            "QPushButton:hover { background:#45454d; } "
+            "QPushButton:checked { background:#3b3b43; }")
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor("#ffffff" if self.kind == "copy" or self.isChecked()
+                       else "#9b9ba3")
+        painter.setPen(QPen(color, 1.4, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        if self.kind == "copy":
+            painter.drawRoundedRect(QRectF(10, 8, 11, 12), 2, 2)
+            painter.drawRoundedRect(QRectF(13, 11, 11, 12), 2, 2)
+        else:
+            painter.save()
+            painter.translate(17, 16)
+            painter.rotate(-42)
+            path = QPainterPath()
+            path.moveTo(-5, -3)
+            path.lineTo(3, -3)
+            path.lineTo(5, 0)
+            path.lineTo(3, 3)
+            path.lineTo(-5, 3)
+            path.closeSubpath()
+            painter.drawPath(path)
+            painter.drawLine(QPointF(-5, 0), QPointF(-9, 0))
+            painter.restore()
+        painter.end()
+
+
 class MediaWaveformIndicator(QWidget):
     def __init__(self):
         super().__init__()
@@ -2550,6 +2594,7 @@ class JarvisWidget(QWidget):
         for entry in history[:20]:
             if not isinstance(entry, dict):
                 continue
+            entry["pinned"] = bool(entry.get("pinned", False))
             if entry.get("kind") == "text" and str(entry.get("text", "")).strip():
                 self._append_clipboard_entry(entry, persist=False)
             elif entry.get("kind") == "image" and os.path.isfile(
@@ -3007,32 +3052,53 @@ class JarvisWidget(QWidget):
             button.setToolTip(text_value)
         button.clicked.connect(
             lambda checked=False, value=dict(entry): self._restore_clipboard_entry(value))
-        copy_button = QPushButton("Copy")
-        copy_button.setFixedSize(58, 32)
-        copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        copy_button.setStyleSheet(
-            "QPushButton { background:#303036; color:white; border-radius:16px; "
-            "font-weight:600; padding:0; text-align:center; } "
-            "QPushButton:hover { background:#45454d; }")
+        copy_button = ClipboardActionButton("copy")
         copy_button.clicked.connect(
             lambda checked=False, value=dict(entry): self._restore_clipboard_entry(value))
+        pin_button = ClipboardActionButton("pin")
+        pin_button.setChecked(bool(entry.get("pinned", False)))
+        pin_button.setToolTip("Unpin" if pin_button.isChecked() else "Pin")
+        pin_button.clicked.connect(
+            lambda checked=False, value=dict(entry), control=pin_button:
+            self._toggle_clipboard_pin(value, control))
         row_layout.addWidget(button, 1)
+        row_layout.addWidget(pin_button)
         row_layout.addWidget(copy_button)
         self.dashboard_clipboard_list.insertWidget(0, row_widget)
         self.dashboard_clipboard_buttons.insert(0, row_widget)
         self._clipboard_history.insert(0, dict(entry))
         while len(self._clipboard_history) > 20:
-            stale_button = self.dashboard_clipboard_buttons.pop()
+            stale_index = next((index for index in range(
+                len(self._clipboard_history) - 1, -1, -1)
+                if not self._clipboard_history[index].get("pinned")), None)
+            if stale_index is None:
+                break
+            stale_button = self.dashboard_clipboard_buttons.pop(stale_index)
             self.dashboard_clipboard_list.removeWidget(stale_button)
             stale_button.deleteLater()
-            self._clipboard_history.pop()
+            self._clipboard_history.pop(stale_index)
         if persist:
-            try:
-                with open(self._clipboard_history_file(), "w", encoding="utf-8") as handle:
-                    json.dump(self._clipboard_history, handle, ensure_ascii=False,
-                              indent=2)
-            except OSError:
-                pass
+            self._save_clipboard_history()
+
+    def _save_clipboard_history(self):
+        try:
+            with open(self._clipboard_history_file(), "w", encoding="utf-8") as handle:
+                json.dump(self._clipboard_history, handle, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    def _toggle_clipboard_pin(self, entry, control):
+        key = (entry.get("kind"), entry.get("text") or entry.get("hash") or
+               entry.get("path"))
+        for stored in self._clipboard_history:
+            stored_key = (stored.get("kind"), stored.get("text") or
+                          stored.get("hash") or stored.get("path"))
+            if stored_key == key:
+                stored["pinned"] = bool(control.isChecked())
+                control.setToolTip("Unpin" if control.isChecked() else "Pin")
+                control.update()
+                self._save_clipboard_history()
+                break
 
     def _restore_clipboard_entry(self, entry):
         clipboard = QApplication.clipboard()

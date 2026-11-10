@@ -178,11 +178,18 @@ def test_clipboard_history_captures_text_and_screenshots(tmp_path):
             assert widget._clipboard_history[0]["kind"] == "image"
             assert os.path.isfile(widget._clipboard_history[0]["path"])
             latest_row = widget.dashboard_clipboard_buttons[0]
-            copy_buttons = latest_row.findChildren(QPushButton)
-            assert any(button.text() == "Copy" for button in copy_buttons)
+            copy_button = latest_row.findChild(
+                QPushButton, "clipboardCopyButton")
+            pin_button = latest_row.findChild(
+                QPushButton, "clipboardPinButton")
+            assert copy_button is not None
+            assert pin_button is not None
+            pin_button.click()
+            assert widget._clipboard_history[0]["pinned"] is True
             with open(widget._clipboard_history_file(), encoding="utf-8") as handle:
                 stored = json.load(handle)
             assert {entry["kind"] for entry in stored} == {"text", "image"}
+            assert stored[0]["pinned"] is True
         finally:
             widget.media_worker.shutdown()
             widget.media_worker.wait(2000)
