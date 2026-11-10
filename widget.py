@@ -1448,16 +1448,17 @@ class JarvisWidget(QWidget):
         handle.setStyleSheet("color:#414247; font-size:13px;")
         nav.addWidget(handle)
         nav.addStretch(1)
-        for key, icon in (("search", "⌕"), ("alerts", "♢"), ("settings", "☷")):
+        # Keep the header focused on actual in-island navigation. The old
+        # alerts diamond only opened Windows Settings, and the trailing grid
+        # duplicated configuration already available elsewhere.
+        for key, icon in (("search", "⌕"),):
             button = QPushButton(icon)
-            button.setCheckable(key in ("search", "settings"))
+            button.setCheckable(True)
             button.setFixedSize(40, 36)
             button.setFont(QFont("Segoe UI Symbol", 16))
-            if key == "alerts":
-                button.clicked.connect(lambda: self._launch_uri("ms-settings:notifications"))
-            else:
-                button.clicked.connect(lambda checked=False, page=key: self._show_dashboard_page(page))
-                self.dashboard_nav_buttons[key] = button
+            button.clicked.connect(
+                lambda checked=False, page=key: self._show_dashboard_page(page))
+            self.dashboard_nav_buttons[key] = button
             nav.addWidget(button)
         dashboard_layout.addLayout(nav)
 
