@@ -900,15 +900,23 @@ class LocalSearchWorker(QThread):
             normalized.append(part)
         return drive, normalized[:5]
 
+    @staticmethod
+    def _has_explicit_scope(query):
+        return any(":" in part for part in str(query).split())
+
     @classmethod
     def _query_windows_index(cls, connection, query):
         drive, terms = cls._parse_search_scope(query)
         clauses = []
+        exact_target = cls._has_explicit_scope(query) and len(terms) == 1
         for term in terms:
             escaped = term.replace("'", "''").replace("%", "[%]")
-            clauses.append(
-                f"(System.FileName LIKE '%{escaped}%' OR "
-                f"System.ItemPathDisplay LIKE '%{escaped}%')")
+            if exact_target:
+                clauses.append(f"System.FileName = '{escaped}'")
+            else:
+                clauses.append(
+                    f"(System.FileName LIKE '%{escaped}%' OR "
+                    f"System.ItemPathDisplay LIKE '%{escaped}%')")
         if drive:
             clauses.append(f"System.ItemPathDisplay LIKE '{drive}:\\%'")
         where = " AND ".join(clauses) or "System.ItemPathDisplay IS NOT NULL"
@@ -968,13 +976,20 @@ class LocalSearchWorker(QThread):
         drive, raw_terms = self._parse_search_scope(query)
         terms = [part.casefold() for part in raw_terms]
         matches = []
+        exact_matches = []
+        exact_target = self._has_explicit_scope(query) and len(terms) == 1
         for path, name, kind in self._drive_catalog:
             if drive and not os.path.normcase(path).startswith(
                     os.path.normcase(f"{drive}:\\")):
                 continue
             folded = path.casefold()
             if all(term in folded for term in terms):
-                matches.append({"path": path, "name": name, "kind": kind})
+                item = {"path": path, "name": name, "kind": kind}
+                matches.append(item)
+                if exact_target and name.casefold() == terms[0]:
+                    exact_matches.append(item)
+        if exact_matches:
+            matches = exact_matches
         matches.sort(key=lambda item: (
             not item["name"].casefold().startswith(terms[-1] if terms else ""),
             len(item["name"]), item["name"].casefold()))
