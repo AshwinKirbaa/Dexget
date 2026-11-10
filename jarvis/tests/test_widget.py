@@ -10,7 +10,35 @@ from PyQt6.QtCore import QPoint
 from jarvis.agent.agent import Agent
 from jarvis.agent.tool_registry import ToolRegistry
 from jarvis.tools.base import RiskLevel, Tool, ToolResult
-from widget import JarvisWidget, JarvisWorker
+from widget import JarvisWidget, JarvisWorker, MediaSessionWorker
+
+
+def test_media_worker_prefers_playing_session_over_stale_current_session():
+    class Status:
+        PLAYING = "playing"
+
+    class Info:
+        def __init__(self, status):
+            self.playback_status = status
+
+    class Session:
+        def __init__(self, status):
+            self.status = status
+
+        def get_playback_info(self):
+            return Info(self.status)
+
+    paused = Session("paused")
+    playing = Session("playing")
+
+    class Manager:
+        def get_current_session(self):
+            return paused
+
+        def get_sessions(self):
+            return [paused, playing]
+
+    assert MediaSessionWorker._select_session(Manager(), Status) is playing
 
 
 def test_widget_text_mode_and_confirmation_without_voice():

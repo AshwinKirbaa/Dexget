@@ -674,8 +674,9 @@ class MediaSessionWorker(QThread):
         next_metadata_poll = 0.0
         cached_artwork_key = None
         cached_artwork = b""
+        missing_since = None
         while not self.shutdown_event.is_set():
-            session = manager.get_current_session()
+            session = self._select_session(manager, PlaybackStatus)
             # Commands are intentionally serviced independently from the
             # heavier metadata poll.  The former two-second combined loop made
             # play/pause/seek feel unresponsive.
@@ -726,10 +727,44 @@ class MediaSessionWorker(QThread):
                         }
                     except Exception:
                         current = {}
+                if current:
+                    missing_since = None
+                elif previous:
+                    # Browsers and packaged media apps briefly withdraw their
+                    # GSMTC session while changing tracks or ads. Preserve the
+                    # existing island during that hand-off instead of flashing
+                    # back to the idle notch.
+                    missing_since = missing_since or now
+                    if now - missing_since < 3.0:
+                        current = previous
                 if current != previous:
                     previous = current
                     self.media_changed.emit(current)
             await asyncio.sleep(0.05)
+
+    @staticmethod
+    def _select_session(manager, playback_status):
+        """Choose an active session even when Windows' current pointer is stale."""
+        try:
+            current = manager.get_current_session()
+        except Exception:
+            current = None
+        try:
+            sessions = list(manager.get_sessions() or [])
+        except Exception:
+            sessions = []
+
+        candidates = []
+        for candidate in ([current] if current else []) + sessions:
+            if candidate is not None and all(candidate is not item for item in candidates):
+                candidates.append(candidate)
+        for candidate in candidates:
+            try:
+                if candidate.get_playback_info().playback_status == playback_status.PLAYING:
+                    return candidate
+            except Exception:
+                continue
+        return current or (candidates[0] if candidates else None)
 
     @staticmethod
     def _duration_seconds(value):
