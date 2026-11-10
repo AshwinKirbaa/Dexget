@@ -904,6 +904,7 @@ class JarvisWidget(QWidget):
         self._hover_leave_at = None
         self._assistant_state = "Idle"
         self._assistant_subtitle = "Ready"
+        self._dashboard_search_pending = False
         self._last_media_key = None
         self._pulse_phase = False
         self._charging_active = False
@@ -2686,6 +2687,21 @@ class JarvisWidget(QWidget):
         query = self.dashboard_search_entry.text().strip()
         if not query:
             return
+        self.dashboard_search_result.mousePressEvent = lambda event: event.ignore()
+        lowered = query.casefold()
+        web_prefix = next((prefix for prefix in ("web:", "search web for ")
+                           if lowered.startswith(prefix)), None)
+        if web_prefix:
+            web_query = query[len(web_prefix):].strip()
+            if web_query:
+                import urllib.parse
+                self.dashboard_search_result.setText(
+                    f'Search the web for “{web_query}”  ›')
+                self.dashboard_search_result.mousePressEvent = (
+                    lambda event, q=web_query: self._launch_uri(
+                        "https://www.google.com/search?q=" +
+                        urllib.parse.quote_plus(q)))
+            return
         try:
             import ast
             import operator
@@ -2709,11 +2725,12 @@ class JarvisWidget(QWidget):
             result = evaluate(ast.parse(query, mode="eval"))
             self.dashboard_search_result.setText(f"{result:g}\n{query}")
         except Exception:
-            self.dashboard_search_result.setText(
-                f'Search the web for “{query}”  ›')
-            import urllib.parse
-            self.dashboard_search_result.mousePressEvent = lambda event, q=query: self._launch_uri(
-                "https://www.google.com/search?q=" + urllib.parse.quote_plus(q))
+            self._dashboard_search_pending = True
+            self.dashboard_search_result.setText("Asking Dexget…")
+            if not self.worker.submit_text(query, display_text=query):
+                self._dashboard_search_pending = False
+                self.dashboard_search_result.setText(
+                    "Dexget is busy. Try again after the current task finishes.")
 
     def _compact_size(self):
         if self._file_shelf_paths and self._displaying_default_page():
@@ -4474,7 +4491,7 @@ class JarvisWidget(QWidget):
             "Processing": "#4aa8ff", "Stopping": "#ffb347", "Idle": "#39e58c"
         }
         self.status_dot.setStyleSheet(f"color: {colors.get(state, '#39e58c')}; font-size: 15px;")
-        if state == "Processing":
+        if state == "Processing" and not self._dashboard_search_pending:
             self.expand_island()
         if state in ("Idle", "Stopping"):
             self.confirmation_panel.hide()
@@ -4582,7 +4599,7 @@ class JarvisWidget(QWidget):
     def set_busy(self, busy):
         self.send_btn.setEnabled(not busy)
         self.stop_btn.setEnabled(busy)
-        if busy:
+        if busy and not self._dashboard_search_pending:
             self.expand_island()
 
     def show_confirmation(self, prompt):
@@ -4693,6 +4710,14 @@ class JarvisWidget(QWidget):
         event.accept()
 
     def add_message(self, role, text):
+        if self._dashboard_search_pending:
+            if role == "User":
+                return
+            if role in ("Jarvis", "Assistant"):
+                self.dashboard_search_result.setText(text)
+                self._dashboard_search_pending = False
+                self._keep_feature_open()
+                return
         if hasattr(self, "worker") and (self.worker.busy.is_set() or role == "User"):
             self.expand_island()
         msg_widget = MessageWidget(role, text)

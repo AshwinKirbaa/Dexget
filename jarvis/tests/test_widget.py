@@ -41,6 +41,33 @@ def test_media_worker_prefers_playing_session_over_stale_current_session():
     assert MediaSessionWorker._select_session(Manager(), Status) is playing
 
 
+def test_dashboard_question_is_sent_to_dexget_and_answer_stays_in_search_page():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(
+            ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.dashboard_search_entry.setText("Why is the sky blue?")
+        with patch.object(widget.worker, "submit_text", return_value=True) as submit:
+            widget._run_dashboard_search()
+        submit.assert_called_once_with(
+            "Why is the sky blue?", display_text="Why is the sky blue?")
+        assert widget._dashboard_search_pending
+        assert widget.dashboard_search_result.text() == "Asking Dexget…"
+
+        widget.add_message("Jarvis", "Because shorter blue wavelengths scatter more.")
+        assert not widget._dashboard_search_pending
+        assert "blue wavelengths" in widget.dashboard_search_result.text()
+    finally:
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
 def test_widget_text_mode_and_confirmation_without_voice():
     app = QApplication.instance() or QApplication([])
     with patch("widget.jarvis_integration.build_agent") as build:
