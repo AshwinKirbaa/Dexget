@@ -11,6 +11,7 @@ __pycache__/
 # Build output
 build/
 dist/
+rust/target/
 
 # Ollama bundled runtime
 lib/ollama/
