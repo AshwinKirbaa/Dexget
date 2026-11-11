@@ -853,6 +853,7 @@ class MediaSessionWorker(QThread):
 class LocalSearchWorker(QThread):
     """Query the Windows Search index without blocking the island UI."""
     results_ready = pyqtSignal(str, object)
+    NATIVE_IDLE_SECONDS = 60.0
 
     def __init__(self):
         super().__init__()
@@ -881,6 +882,8 @@ class LocalSearchWorker(QThread):
         connection = None
         try:
             self._native_search = self._start_native_search()
+            if self._native_search is not None:
+                self._native_last_used = time.monotonic()
             try:
                 connection = win32com.client.Dispatch("ADODB.Connection")
                 connection.Open(
@@ -892,7 +895,8 @@ class LocalSearchWorker(QThread):
                     query = self.queries.get(timeout=0.2)
                 except queue.Empty:
                     if (self._native_search is not None and
-                            time.monotonic() - self._native_last_used > 2.0):
+                            time.monotonic() - self._native_last_used >
+                            self.NATIVE_IDLE_SECONDS):
                         self._stop_native_search()
                     continue
                 if not query or self.shutdown_event.is_set():
@@ -916,6 +920,8 @@ class LocalSearchWorker(QThread):
                 try:
                     if self._native_search is None:
                         self._native_search = self._start_native_search()
+                        if self._native_search is not None:
+                            self._native_last_used = time.monotonic()
                     direct = (self._query_native_catalog(query)
                               if self._native_search is not None
                               else self._query_drive_catalog(query))
@@ -1341,6 +1347,10 @@ class JarvisWidget(QWidget):
         self.local_search_worker = LocalSearchWorker()
         self.local_search_worker.results_ready.connect(
             self._show_local_search_results)
+        # Warm the native catalog off the UI thread. Starting it only after
+        # the first keystroke made the initial search pay the full catalog
+        # load cost and felt much slower than the previous implementation.
+        QTimer.singleShot(0, self.local_search_worker.start)
         self._init_system_tray()
         self._update_default_status()
         self._sync_compact_surface()
