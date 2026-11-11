@@ -860,6 +860,7 @@ class LocalSearchWorker(QThread):
         self.queries = queue.Queue()
         self._drive_catalog = None
         self._native_search = None
+        self._native_last_used = 0.0
 
     def search(self, query):
         while True:
@@ -890,6 +891,9 @@ class LocalSearchWorker(QThread):
                 try:
                     query = self.queries.get(timeout=0.2)
                 except queue.Empty:
+                    if (self._native_search is not None and
+                            time.monotonic() - self._native_last_used > 2.0):
+                        self._stop_native_search()
                     continue
                 if not query or self.shutdown_event.is_set():
                     continue
@@ -910,6 +914,8 @@ class LocalSearchWorker(QThread):
                 if self.shutdown_event.is_set():
                     continue
                 try:
+                    if self._native_search is None:
+                        self._native_search = self._start_native_search()
                     direct = (self._query_native_catalog(query)
                               if self._native_search is not None
                               else self._query_drive_catalog(query))
@@ -966,6 +972,7 @@ class LocalSearchWorker(QThread):
             raise RuntimeError("native search service is unavailable")
         process.stdin.write(json.dumps({"query": str(query)}) + "\n")
         process.stdin.flush()
+        self._native_last_used = time.monotonic()
         response = process.stdout.readline()
         if not response:
             raise RuntimeError("native search service closed its output")
@@ -1114,8 +1121,23 @@ class LocalSearchWorker(QThread):
     def _merge_results(indexed, direct):
         merged = []
         seen = set()
-        for item in list(direct) + list(indexed):
-            key = os.path.normcase(os.path.normpath(item["path"]))
+        combined = list(direct) + list(indexed)
+        combined.sort(key=lambda item: (
+            os.path.splitext(str(item.get("path", "")))[1].casefold() == ".lnk",))
+        for item in combined:
+            item = dict(item)
+            path = str(item.get("path", ""))
+            extension = os.path.splitext(path)[1].casefold()
+            kind = str(item.get("kind", ""))
+            if extension == ".lnk" or "shortcut" in kind.casefold():
+                item["kind"] = "Application"
+                item["name"] = os.path.splitext(
+                    str(item.get("name") or os.path.basename(path)))[0]
+            if item.get("kind") == "Application":
+                key = ("application", os.path.splitext(
+                    str(item.get("name", "")))[0].casefold())
+            else:
+                key = os.path.normcase(os.path.normpath(path))
             if key not in seen:
                 seen.add(key)
                 merged.append(item)
@@ -2105,7 +2127,7 @@ class JarvisWidget(QWidget):
         self.dashboard_search_entry.returnPressed.connect(self._run_dashboard_search)
         self._local_search_debounce = QTimer(self)
         self._local_search_debounce.setSingleShot(True)
-        self._local_search_debounce.setInterval(180)
+        self._local_search_debounce.setInterval(90)
         self._local_search_debounce.timeout.connect(self._queue_local_search)
         self.dashboard_search_entry.textChanged.connect(
             lambda: self._local_search_debounce.start())

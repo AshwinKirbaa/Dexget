@@ -11,12 +11,14 @@ use std::{
     env, fs,
     io::{self, BufRead, BufWriter, Write},
     path::{Path, PathBuf},
+    time::{Duration, SystemTime},
 };
 
 const MAX_CATALOG_ITEMS: usize = 300_000;
 const MAX_RESULTS: usize = 12;
+const CACHE_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct CatalogItem {
     path: PathBuf,
     path_folded: String,
@@ -38,7 +40,12 @@ struct SearchResult<'a> {
 }
 
 fn main() -> io::Result<()> {
-    let catalog = build_catalog(&configured_roots());
+    let roots = configured_roots();
+    let catalog = load_cached_catalog(&roots).unwrap_or_else(|| {
+        let catalog = build_catalog(&roots);
+        save_catalog(&catalog);
+        catalog
+    });
     let stdin = io::stdin();
     let mut output = BufWriter::new(io::stdout().lock());
 
@@ -53,6 +60,53 @@ fn main() -> io::Result<()> {
         output.flush()?;
     }
     Ok(())
+}
+
+fn cache_path() -> Option<PathBuf> {
+    env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|root| root.join("Dexget").join("search-catalog-v1.json"))
+}
+
+fn load_cached_catalog(roots: &[PathBuf]) -> Option<Vec<CatalogItem>> {
+    let path = cache_path()?;
+    let metadata = fs::metadata(&path).ok()?;
+    let age = SystemTime::now()
+        .duration_since(metadata.modified().ok()?)
+        .ok()?;
+    if age > CACHE_MAX_AGE {
+        return None;
+    }
+    let catalog: Vec<CatalogItem> = serde_json::from_reader(fs::File::open(path).ok()?).ok()?;
+    let root_prefixes: Vec<String> = roots
+        .iter()
+        .map(|root| root.to_string_lossy().to_lowercase())
+        .collect();
+    if catalog.iter().any(|item| {
+        !root_prefixes
+            .iter()
+            .any(|root| item.path_folded.starts_with(root))
+    }) {
+        return None;
+    }
+    Some(catalog)
+}
+
+fn save_catalog(catalog: &[CatalogItem]) {
+    let Some(path) = cache_path() else { return };
+    let Some(parent) = path.parent() else { return };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let temporary = path.with_extension("tmp");
+    let Ok(file) = fs::File::create(&temporary) else {
+        return;
+    };
+    if serde_json::to_writer(file, catalog).is_ok() {
+        let _ = fs::rename(temporary, path);
+    } else {
+        let _ = fs::remove_file(temporary);
+    }
 }
 
 fn configured_roots() -> Vec<PathBuf> {
@@ -131,7 +185,7 @@ fn item_kind(path: &Path) -> &'static str {
         .as_str()
     {
         "exe" => "Application",
-        "lnk" => "Shortcut",
+        "lnk" => "Application",
         "mp4" | "mkv" | "mov" | "avi" | "webm" => "Video",
         "png" | "jpg" | "jpeg" | "gif" | "webp" => "Image",
         "mp3" | "wav" | "flac" | "m4a" => "Audio",
