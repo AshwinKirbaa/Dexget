@@ -1180,6 +1180,7 @@ class JarvisWidget(QWidget):
         self._default_page_override = False
         self._activity_page = "default"
         self._file_shelf_paths = []
+        self._phone_transfer_view = False
         self._transfer_server = None
         self._transfer_received_count = 0
         self._swipe_start_pos = None
@@ -2069,6 +2070,14 @@ class JarvisWidget(QWidget):
         shelf_hint = QLabel("Drag a file out to copy")
         shelf_hint.setStyleSheet("color:#8e8e93; font-size:10px;")
         shelf_header.addWidget(shelf_hint)
+        self.file_shelf_share_btn = QPushButton("Share")
+        self.file_shelf_share_btn.setToolTip("Open the Windows share sheet")
+        self.file_shelf_share_btn.clicked.connect(self._share_file_shelf_normally)
+        shelf_header.addWidget(self.file_shelf_share_btn)
+        self.file_shelf_phone_btn = QPushButton("Share to phone")
+        self.file_shelf_phone_btn.setToolTip("Share these files with Dexget Android")
+        self.file_shelf_phone_btn.clicked.connect(self._share_file_shelf_to_phone)
+        shelf_header.addWidget(self.file_shelf_phone_btn)
         self.file_shelf_clear_btn = QPushButton("Clear")
         self.file_shelf_clear_btn.clicked.connect(self._clear_file_shelf)
         shelf_header.addWidget(self.file_shelf_clear_btn)
@@ -2324,7 +2333,8 @@ class JarvisWidget(QWidget):
 
     def _feature_uses_dashboard(self):
         """Calls keep useful compact controls but expand into the tool dashboard."""
-        return (not self._file_shelf_paths and self._displaying_default_page() or
+        return (self._phone_transfer_view or
+                not self._file_shelf_paths and self._displaying_default_page() or
                 bool(self._call_context and not self._media))
 
     def _sync_compact_surface(self):
@@ -3457,7 +3467,8 @@ class JarvisWidget(QWidget):
         # Size from the page the user is viewing, not merely from background
         # activity. A swiped-away media session must not lend its player size
         # to the default dashboard page.
-        if self._file_shelf_paths and self._displaying_default_page():
+        if (self._file_shelf_paths and self._displaying_default_page()
+                and not self._phone_transfer_view):
             return QSize(self.FILE_SHELF_EXPANDED_SIZE)
         if self._feature_uses_dashboard():
             return QSize(self.DASHBOARD_EXPANDED_SIZE)
@@ -3735,6 +3746,7 @@ class JarvisWidget(QWidget):
             return
         if self.input_field.hasFocus() and self.input_field.text():
             return
+        self._phone_transfer_view = False
         if self._assistant_state == "Idle" and self._is_default_activity():
             self.is_expanded = False
             self.feature_panel.hide()
@@ -3921,7 +3933,8 @@ class JarvisWidget(QWidget):
         # Contextual activities stay focused on their own controls.  Dexget AI
         # is intentionally available only from the default compact island.
         self.feature_ai_btn.hide()
-        shelf_mode = bool(self._file_shelf_paths and self._displaying_default_page())
+        shelf_mode = bool(self._file_shelf_paths and self._displaying_default_page()
+                          and not self._phone_transfer_view)
         dashboard_mode = not shelf_mode and self._feature_uses_dashboard()
         media_mode = bool(self._media) and not dashboard_mode and not shelf_mode
         for widget in (self.feature_eyebrow, self.feature_title,
@@ -4078,6 +4091,7 @@ class JarvisWidget(QWidget):
         """Return a temporary feature surface to its compact live activity."""
         if not self.is_expanded or self._expanded_view != "feature":
             return
+        self._phone_transfer_view = False
         self.is_expanded = False
         self.feature_panel.hide()
         self.title_bar.show()
@@ -5009,6 +5023,36 @@ class JarvisWidget(QWidget):
         self.file_shelf_cards_layout.addStretch()
         self.file_shelf_title.setText(f"▰  SHELF  {len(self._file_shelf_paths)}")
 
+    def _share_file_shelf_normally(self):
+        """Open Windows' native share surface for the first shelf item."""
+        paths = [path for path in self._file_shelf_paths if os.path.isfile(path)]
+        if not paths:
+            return
+        try:
+            os.startfile(paths[0], "share")
+            if len(paths) > 1:
+                self.file_shelf_title.setText(
+                    f"▰  SHELF  {len(paths)}  · sharing first item")
+        except OSError:
+            # Some file types do not expose the Share shell verb. Keep the
+            # source intact and select it in Explorer so Windows' Share action
+            # remains one click away.
+            import subprocess
+            subprocess.Popen(["explorer.exe", f"/select,{paths[0]}"])
+            self.file_shelf_title.setText("▰  SHELF  · select Share in Explorer")
+        self._keep_feature_open()
+
+    def _share_file_shelf_to_phone(self):
+        """Move from the shelf to the QR transfer page and start sharing."""
+        if not self._file_shelf_paths:
+            return
+        self._phone_transfer_view = True
+        self._show_dashboard_page("transfer")
+        self._prepare_feature_panel()
+        self._start_phone_transfer()
+        self._animate_to(self.DASHBOARD_EXPANDED_SIZE, self.PANEL_TRANSITION_MS)
+        self._keep_feature_open()
+
     def _remove_file_from_shelf(self, path):
         key = os.path.normcase(os.path.abspath(path))
         self._file_shelf_paths = [
@@ -5045,6 +5089,7 @@ class JarvisWidget(QWidget):
         if not self._file_shelf_paths and not force:
             return
         self._file_shelf_paths = []
+        self._phone_transfer_view = False
         self.file_shelf_widget.set_files([])
         self.is_expanded = False
         self.file_shelf_panel.hide()

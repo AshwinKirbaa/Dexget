@@ -1229,6 +1229,16 @@ def test_file_shelf_holds_local_file_and_restores_default_notch(tmp_path):
         assert widget.file_shelf_widget.count_label.isHidden()
         assert widget.file_shelf_widget.hint_label.isHidden()
         assert widget.file_shelf_title.text().endswith("2")
+        assert widget.file_shelf_share_btn.text() == "Share"
+        assert widget.file_shelf_phone_btn.text() == "Share to phone"
+
+        with patch.object(widget, "_start_phone_transfer") as start_transfer:
+            widget._share_file_shelf_to_phone()
+            assert widget._phone_transfer_view
+            assert widget._feature_uses_dashboard()
+            assert widget.dashboard_stack.currentWidget() is widget.dashboard_pages["transfer"]
+            start_transfer.assert_called_once_with()
+        widget._phone_transfer_view = False
 
         mime = widget._file_shelf_mime_data()
         assert mime.hasUrls()
