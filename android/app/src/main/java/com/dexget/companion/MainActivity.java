@@ -69,6 +69,8 @@ public class MainActivity extends Activity {
     private String pendingPassword;
     private String pendingTarget;
     private boolean wifiConnectionRequested;
+    private boolean reconnectAttempted;
+    private ConnectivityManager.NetworkCallback directNetworkCallback;
     private final Set<String> downloadedFiles = ConcurrentHashMap.newKeySet();
 
     @Override public void onCreate(Bundle state) {
@@ -78,7 +80,7 @@ public class MainActivity extends Activity {
         setContentView(buildUi());
         renderPairing();
         handleLaunchAction(getIntent());
-        if (!endpoint.isEmpty() && !ACTION_PICK_FILES.equals(getIntent().getAction())) refreshFiles();
+        if (!endpoint.isEmpty() && !ACTION_PICK_FILES.equals(getIntent().getAction())) restorePairing();
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -92,7 +94,7 @@ public class MainActivity extends Activity {
         String action = intent.getAction();
         if (ACTION_SCAN.equals(action)) scanPairing();
         else if (ACTION_PICK_FILES.equals(action)) chooseFiles();
-        else if (ACTION_REFRESH.equals(action)) refreshFiles();
+        else if (ACTION_REFRESH.equals(action)) restorePairing();
     }
 
     private View buildUi() {
@@ -235,6 +237,7 @@ public class MainActivity extends Activity {
                 String ssid = uri.getQueryParameter("ssid");
                 String password = uri.getQueryParameter("password");
                 if (ssid != null && password != null) {
+                    savePairing(candidate, ssid, password);
                     tryCurrentNetworkFirst(ssid, password, candidate);
                     return;
                 }
@@ -242,13 +245,32 @@ public class MainActivity extends Activity {
             if (!candidate.startsWith("http://") && !candidate.startsWith("https://"))
                 throw new IllegalArgumentException("Not a Dexget pairing code");
             endpoint = candidate.endsWith("/") ? candidate : candidate + "/";
-            prefs.edit().putString("endpoint", endpoint).apply();
+            savePairing(endpoint, "", "");
             renderPairing();
             DexgetWidget.updateAll(this);
             refreshFiles();
         } catch (Exception error) {
             status.setText("Invalid pairing code: " + error.getMessage());
         }
+    }
+
+    private void savePairing(String target, String ssid, String password) {
+        endpoint = target.endsWith("/") ? target : target + "/";
+        prefs.edit()
+                .putString("endpoint", endpoint)
+                .putString("ssid", ssid == null ? "" : ssid)
+                .putString("password", password == null ? "" : password)
+                .apply();
+    }
+
+    private void restorePairing() {
+        String ssid = prefs.getString("ssid", "");
+        String password = prefs.getString("password", "");
+        reconnectAttempted = false;
+        if (!ssid.isEmpty() && !password.isEmpty())
+            tryCurrentNetworkFirst(ssid, password, endpoint);
+        else
+            refreshFiles();
     }
 
     private void tryCurrentNetworkFirst(String ssid, String password, String target) {
@@ -268,7 +290,7 @@ public class MainActivity extends Activity {
                     throw new Exception("Laptop returned " + connection.getResponseCode());
                 connection.disconnect();
                 pendingSsid = pendingPassword = pendingTarget = null;
-                prefs.edit().putString("endpoint", endpoint).apply();
+                savePairing(endpoint, ssid, password);
                 runOnUiThread(() -> {
                     renderPairing();
                     DexgetWidget.updateAll(MainActivity.this);
@@ -314,24 +336,34 @@ public class MainActivity extends Activity {
                     .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                     .setNetworkSpecifier(specifier).build();
             ConnectivityManager manager = (ConnectivityManager)getSystemService(Context.CONNECTIVITY_SERVICE);
-            manager.requestNetwork(request, new ConnectivityManager.NetworkCallback() {
+            if (directNetworkCallback != null) {
+                try { manager.unregisterNetworkCallback(directNetworkCallback); }
+                catch (Exception ignored) { }
+            }
+            directNetworkCallback = new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) {
                 directNetwork = network;
                 wifiConnectionRequested = false;
                 pendingSsid = pendingPassword = pendingTarget = null;
-                endpoint = target.endsWith("/") ? target : target + "/";
-                prefs.edit().putString("endpoint", endpoint).apply();
+                savePairing(target, ssid, password);
                 runOnUiThread(() -> {
                     renderPairing();
                     DexgetWidget.updateAll(MainActivity.this);
                     refreshFiles();
                 });
             }
+            @Override public void onLost(Network network) {
+                if (network.equals(directNetwork)) directNetwork = null;
+                wifiConnectionRequested = false;
+                runOnUiThread(() -> status.setText(
+                        "Direct connection paused · tap Refresh to reconnect."));
+            }
             @Override public void onUnavailable() {
                 wifiConnectionRequested = false;
                 runOnUiThread(() -> status.setText("Connection was not approved or the network was unavailable."));
             }
-            });
+            };
+            manager.requestNetwork(request, directNetworkCallback, 15000);
         } catch (SecurityException error) {
             wifiConnectionRequested = false;
             status.setText("Android blocked the Wi-Fi connection permission. Reinstall the latest Dexget app.");
@@ -360,11 +392,23 @@ public class MainActivity extends Activity {
                 JSONArray files = new JSONObject(json).getJSONArray("files");
                 runOnUiThread(() -> showFiles(files));
             } catch (Exception error) {
-                runOnUiThread(() -> status.setText(
-                        "Laptop unavailable: " + error.getClass().getSimpleName()
-                                + ". Keep Share to phone open on the laptop."));
+                runOnUiThread(() -> recoverConnection(error));
             } finally { runOnUiThread(() -> busy(false, null)); }
         });
+    }
+
+    private void recoverConnection(Exception error) {
+        String ssid = prefs.getString("ssid", "");
+        String password = prefs.getString("password", "");
+        if (!reconnectAttempted && !ssid.isEmpty() && !password.isEmpty()
+                && !wifiConnectionRequested) {
+            reconnectAttempted = true;
+            status.setText("Laptop route changed · reconnecting to " + ssid + "…");
+            prepareDirectConnection(ssid, password, endpoint);
+            return;
+        }
+        status.setText("Pairing session unavailable (" + error.getClass().getSimpleName()
+                + "). Open Share to phone on the laptop and scan its new QR.");
     }
 
     private void showFiles(JSONArray files) {

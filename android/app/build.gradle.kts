@@ -8,8 +8,8 @@ android {
         applicationId = "com.dexget.companion"
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.2.0"
+        versionCode = 9
+        versionName = "1.2.1"
     }
 
     buildTypes {
