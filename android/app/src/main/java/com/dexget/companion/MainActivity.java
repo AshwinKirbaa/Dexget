@@ -217,7 +217,7 @@ public class MainActivity extends Activity {
                 String ssid = uri.getQueryParameter("ssid");
                 String password = uri.getQueryParameter("password");
                 if (ssid != null && password != null) {
-                    prepareDirectConnection(ssid, password, candidate);
+                    tryCurrentNetworkFirst(ssid, password, candidate);
                     return;
                 }
             }
@@ -230,6 +230,34 @@ public class MainActivity extends Activity {
         } catch (Exception error) {
             status.setText("Invalid pairing code: " + error.getMessage());
         }
+    }
+
+    private void tryCurrentNetworkFirst(String ssid, String password, String target) {
+        pendingSsid = ssid;
+        pendingPassword = password;
+        pendingTarget = target;
+        directNetwork = null;
+        endpoint = target.endsWith("/") ? target : target + "/";
+        status.setText("Finding laptop on the current network…");
+        io.execute(() -> {
+            try {
+                URL url = new URL(endpoint + "api/files");
+                HttpURLConnection connection = (HttpURLConnection)url.openConnection();
+                connection.setConnectTimeout(2500);
+                connection.setReadTimeout(2500);
+                if (connection.getResponseCode() >= 300)
+                    throw new Exception("Laptop returned " + connection.getResponseCode());
+                connection.disconnect();
+                pendingSsid = pendingPassword = pendingTarget = null;
+                prefs.edit().putString("endpoint", endpoint).apply();
+                runOnUiThread(() -> {
+                    renderPairing();
+                    refreshFiles();
+                });
+            } catch (Exception ignored) {
+                runOnUiThread(() -> prepareDirectConnection(ssid, password, target));
+            }
+        });
     }
 
     private void prepareDirectConnection(String ssid, String password, String target) {
@@ -291,7 +319,11 @@ public class MainActivity extends Activity {
 
     private HttpURLConnection open(String path) throws Exception {
         URL url = new URL(endpoint + path);
-        return (HttpURLConnection)(directNetwork != null ? directNetwork.openConnection(url) : url.openConnection());
+        HttpURLConnection connection = (HttpURLConnection)(
+                directNetwork != null ? directNetwork.openConnection(url) : url.openConnection());
+        connection.setConnectTimeout(7000);
+        connection.setReadTimeout(15000);
+        return connection;
     }
 
     private void refreshFiles() {
@@ -304,7 +336,9 @@ public class MainActivity extends Activity {
                 JSONArray files = new JSONObject(json).getJSONArray("files");
                 runOnUiThread(() -> showFiles(files));
             } catch (Exception error) {
-                runOnUiThread(() -> status.setText("Laptop unavailable. Start sharing in Dexget."));
+                runOnUiThread(() -> status.setText(
+                        "Laptop unavailable: " + error.getClass().getSimpleName()
+                                + ". Keep Share to phone open on the laptop."));
             } finally { runOnUiThread(() -> busy(false, null)); }
         });
     }
