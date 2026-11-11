@@ -3,6 +3,7 @@ package com.dexget.companion;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -18,6 +19,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
+import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -43,6 +45,8 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -62,6 +66,7 @@ public class MainActivity extends Activity {
     private String pendingPassword;
     private String pendingTarget;
     private boolean wifiConnectionRequested;
+    private final Set<String> downloadedFiles = ConcurrentHashMap.newKeySet();
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -306,15 +311,67 @@ public class MainActivity extends Activity {
 
     private void showFiles(JSONArray files) {
         downloads.removeAllViews();
+        List<JSONObject> pending = new ArrayList<>();
         for (int i = 0; i < files.length(); i++) {
             JSONObject file = files.optJSONObject(i);
             if (file == null) continue;
             Button item = button(file.optString("name") + "   ↓");
             int index = file.optInt("index");
-            item.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(endpoint + "download/" + index))));
+            String name = file.optString("name", "download");
+            item.setOnClickListener(v -> downloadFile(index, name, false));
             downloads.addView(item, new LinearLayout.LayoutParams(-1, dp(54)));
+            if (!downloadedFiles.contains(downloadKey(index, name))) pending.add(file);
         }
         status.setText("Connected · " + files.length() + " file(s) available");
+        if (!pending.isEmpty()) {
+            status.setText("Connected · downloading " + pending.size() + " file(s)…");
+            for (JSONObject file : pending)
+                downloadFile(file.optInt("index"), file.optString("name", "download"), true);
+        }
+    }
+
+    private String downloadKey(int index, String name) {
+        return endpoint + "|" + index + "|" + name;
+    }
+
+    private void downloadFile(int index, String requestedName, boolean automatic) {
+        final String name = requestedName.replaceAll("[\\\\/:*?\"<>|]", "_");
+        final String key = downloadKey(index, requestedName);
+        if (automatic && downloadedFiles.contains(key)) return;
+        io.execute(() -> {
+            Uri destination = null;
+            try {
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                values.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/Dexget");
+                values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+                destination = getContentResolver().insert(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (destination == null) throw new Exception("Downloads folder is unavailable");
+
+                HttpURLConnection connection = open("download/" + index);
+                if (connection.getResponseCode() >= 300)
+                    throw new Exception("Laptop returned " + connection.getResponseCode());
+                try (InputStream input = connection.getInputStream();
+                     OutputStream output = getContentResolver().openOutputStream(destination)) {
+                    if (output == null) throw new Exception("Could not create the downloaded file");
+                    byte[] buffer = new byte[256 * 1024];
+                    int count;
+                    while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
+                }
+                values.clear();
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                getContentResolver().update(destination, values, null, null);
+                downloadedFiles.add(key);
+                runOnUiThread(() -> status.setText(
+                        "Downloaded " + name + " to Downloads/Dexget"));
+            } catch (Exception error) {
+                if (destination != null) getContentResolver().delete(destination, null, null);
+                runOnUiThread(() -> status.setText(
+                        "Download failed for " + name + ": " + error.getMessage()));
+            }
+        });
     }
 
     private void chooseFiles() {
