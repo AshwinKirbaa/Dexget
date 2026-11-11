@@ -271,7 +271,7 @@ public class MainActivity extends Activity {
                 prefs.edit().putString("endpoint", endpoint).apply();
                 runOnUiThread(() -> {
                     renderPairing();
-                    DexgetWidget.updateAll(this);
+                    DexgetWidget.updateAll(MainActivity.this);
                     refreshFiles();
                 });
             } catch (Exception ignored) {
@@ -323,7 +323,7 @@ public class MainActivity extends Activity {
                 prefs.edit().putString("endpoint", endpoint).apply();
                 runOnUiThread(() -> {
                     renderPairing();
-                    DexgetWidget.updateAll(this);
+                    DexgetWidget.updateAll(MainActivity.this);
                     refreshFiles();
                 });
             }
