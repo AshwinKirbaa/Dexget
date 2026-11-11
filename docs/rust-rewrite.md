@@ -1,11 +1,16 @@
 # Dexget native Rust rewrite
 
-Dexget is being migrated incrementally so the existing Python release remains usable while native replacements are verified.
+Dexget uses a hybrid architecture. The PyQt UI and mature Windows automation
+remain in Python, while measured CPU- or memory-heavy services move to Rust.
+Every native service has a Python fallback so packaging or startup failures do
+not remove features.
 
 ## Workspace
 
 - `rust/crates/dexget-core`: platform-neutral commands, settings, reminders, and domain types.
 - `rust/crates/dexget-app`: native always-on-top Dynamic Island shell.
+- `rust/crates/dexget-search`: persistent low-memory drive catalog used by the
+  production PyQt island.
 - Future `dexget-windows`: WinRT media sessions, Core Audio, power, notifications, UI Automation, process and filesystem APIs.
 - Future `dexget-automation`: deterministic routing, recorded macros, browser automation and Ollama lifecycle.
 - The existing `android/` companion remains Kotlin because it is a native Android application, not part of the Windows Python runtime.
@@ -27,4 +32,6 @@ cargo test --workspace
 cargo run -p dexget
 ```
 
-The Rust package uses a new executable during migration. It must not overwrite the installed Python build until the parity checklist is complete.
+The native UI is an experimental shell. The production application remains the
+PyQt island; Rust sidecars are adopted only when they preserve behavior and
+show a measurable efficiency improvement.

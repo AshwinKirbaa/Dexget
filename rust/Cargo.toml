@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/dexget-core", "crates/dexget-app"]
+members = ["crates/dexget-core", "crates/dexget-app", "crates/dexget-search"]
 resolver = "2"
 
 [workspace.package]

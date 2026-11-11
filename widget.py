@@ -7,6 +7,7 @@ import os
 import json
 import shutil
 import hashlib
+import subprocess
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QLineEdit, QPushButton, QScrollArea, 
                         QFrame, QSizePolicy, QGraphicsDropShadowEffect, QInputDialog,
@@ -858,6 +859,7 @@ class LocalSearchWorker(QThread):
         self.shutdown_event = threading.Event()
         self.queries = queue.Queue()
         self._drive_catalog = None
+        self._native_search = None
 
     def search(self, query):
         while True:
@@ -877,6 +879,7 @@ class LocalSearchWorker(QThread):
         pythoncom.CoInitialize()
         connection = None
         try:
+            self._native_search = self._start_native_search()
             try:
                 connection = win32com.client.Dispatch("ADODB.Connection")
                 connection.Open(
@@ -907,18 +910,84 @@ class LocalSearchWorker(QThread):
                 if self.shutdown_event.is_set():
                     continue
                 try:
-                    direct = self._query_drive_catalog(query)
+                    direct = (self._query_native_catalog(query)
+                              if self._native_search is not None
+                              else self._query_drive_catalog(query))
                     merged = self._merge_results(results, direct)
                     self.results_ready.emit(query, merged)
                 except Exception:
-                    pass
+                    # The Rust helper is an optimization, never a dependency.
+                    # Fall back in-process if it exits or returns malformed data.
+                    self._stop_native_search()
+                    try:
+                        direct = self._query_drive_catalog(query)
+                        self.results_ready.emit(
+                            query, self._merge_results(results, direct))
+                    except Exception:
+                        pass
         finally:
+            self._stop_native_search()
             if connection is not None:
                 try:
                     connection.Close()
                 except Exception:
                     pass
             pythoncom.CoUninitialize()
+
+    @staticmethod
+    def _native_search_candidates():
+        configured = os.getenv("DEXGET_SEARCH_EXE", "").strip()
+        if configured:
+            yield configured
+        executable_dir = os.path.dirname(os.path.abspath(sys.executable))
+        yield os.path.join(executable_dir, "dexget-search.exe")
+        project_dir = os.path.dirname(os.path.abspath(__file__))
+        yield os.path.join(project_dir, "rust", "target", "release",
+                           "dexget-search.exe")
+
+    @classmethod
+    def _start_native_search(cls):
+        executable = next((path for path in cls._native_search_candidates()
+                           if os.path.isfile(path)), None)
+        if not executable:
+            return None
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            return subprocess.Popen(
+                [executable], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+                bufsize=1, creationflags=flags)
+        except (OSError, ValueError):
+            return None
+
+    def _query_native_catalog(self, query):
+        process = self._native_search
+        if process is None or process.poll() is not None:
+            raise RuntimeError("native search service is unavailable")
+        process.stdin.write(json.dumps({"query": str(query)}) + "\n")
+        process.stdin.flush()
+        response = process.stdout.readline()
+        if not response:
+            raise RuntimeError("native search service closed its output")
+        results = json.loads(response)
+        if not isinstance(results, list):
+            raise ValueError("native search response must be a list")
+        return [item for item in results
+                if isinstance(item, dict) and item.get("path")]
+
+    def _stop_native_search(self):
+        process, self._native_search = self._native_search, None
+        if process is None:
+            return
+        try:
+            if process.stdin:
+                process.stdin.close()
+            process.wait(timeout=0.4)
+        except Exception:
+            try:
+                process.terminate()
+            except Exception:
+                pass
 
     @staticmethod
     def _parse_search_scope(query):

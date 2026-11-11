@@ -33,6 +33,19 @@ New-Item -ItemType Directory -Path $msixDir | Out-Null
 
 Copy-Item "dist\JarvisAgent.exe" -Destination $msixDir
 
+$cargo = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
+if (Test-Path $cargo) {
+    Write-Host "   -> Building native Rust search service..."
+    & $cargo build --manifest-path "rust\Cargo.toml" -p dexget-search --release --locked
+    if ($LASTEXITCODE -ne 0) { throw "Rust search service build failed." }
+    Copy-Item "rust\target\release\dexget-search.exe" -Destination $msixDir
+} elseif (Test-Path "rust\target\release\dexget-search.exe") {
+    Write-Host "   -> Reusing native Rust search service..."
+    Copy-Item "rust\target\release\dexget-search.exe" -Destination $msixDir
+} else {
+    Write-Warning "Rust search helper unavailable; package will use the Python fallback."
+}
+
 # Copy .env so the packaged app can read it from beside the .exe
 if (Test-Path ".env") {
     Copy-Item ".env" -Destination $msixDir
@@ -54,7 +67,7 @@ $manifest = @"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10">
 
-  <Identity Name="JarvisAI" Publisher="CN=JarvisDev" Version="1.0.137.0" ProcessorArchitecture="$packageArch"/>
+  <Identity Name="JarvisAI" Publisher="CN=JarvisDev" Version="1.0.138.0" ProcessorArchitecture="$packageArch"/>
   
   <Properties>
     <DisplayName>JARVIS</DisplayName>
