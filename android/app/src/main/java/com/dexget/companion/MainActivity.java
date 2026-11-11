@@ -253,14 +253,15 @@ public class MainActivity extends Activity {
         if (wifiConnectionRequested) return;
         wifiConnectionRequested = true;
         status.setText("Connecting to " + ssid + "…");
-        WifiNetworkSpecifier specifier = new WifiNetworkSpecifier.Builder()
-                .setSsid(ssid).setWpa2Passphrase(password).build();
-        NetworkRequest request = new NetworkRequest.Builder()
-                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .setNetworkSpecifier(specifier).build();
-        ConnectivityManager manager = (ConnectivityManager)getSystemService(Context.CONNECTIVITY_SERVICE);
-        manager.requestNetwork(request, new ConnectivityManager.NetworkCallback() {
+        try {
+            WifiNetworkSpecifier specifier = new WifiNetworkSpecifier.Builder()
+                    .setSsid(ssid).setWpa2Passphrase(password).build();
+            NetworkRequest request = new NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .setNetworkSpecifier(specifier).build();
+            ConnectivityManager manager = (ConnectivityManager)getSystemService(Context.CONNECTIVITY_SERVICE);
+            manager.requestNetwork(request, new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) {
                 directNetwork = network;
                 wifiConnectionRequested = false;
@@ -273,7 +274,14 @@ public class MainActivity extends Activity {
                 wifiConnectionRequested = false;
                 runOnUiThread(() -> status.setText("Connection was not approved or the network was unavailable."));
             }
-        });
+            });
+        } catch (SecurityException error) {
+            wifiConnectionRequested = false;
+            status.setText("Android blocked the Wi-Fi connection permission. Reinstall the latest Dexget app.");
+        } catch (Exception error) {
+            wifiConnectionRequested = false;
+            status.setText("Could not connect to " + ssid + ": " + error.getMessage());
+        }
     }
 
     private HttpURLConnection open(String path) throws Exception {
