@@ -1678,6 +1678,12 @@ class JarvisWidget(QWidget):
             QPushButton:checked { background: #2b2c30; color: white; }
             QLineEdit { color: white; background: #151517; border: none;
                         border-radius: 11px; padding: 10px 14px; font-size: 13px; }
+            QComboBox, QDateTimeEdit { color:#e8e8eb; background:#17181c;
+                        border:1px solid #292a30; border-radius:9px;
+                        padding:5px 9px; font-size:11px; }
+            QComboBox::drop-down, QDateTimeEdit::drop-down { border:none; width:18px; }
+            QComboBox QAbstractItemView { color:white; background:#17181c;
+                        selection-background-color:#2b2c30; border:1px solid #303139; }
             QSlider::groove:horizontal { height: 7px; background: #36373b;
                                          border-radius: 3px; }
             QSlider::sub-page:horizontal { background: #ffcf00; border-radius: 3px; }
@@ -1874,12 +1880,13 @@ class JarvisWidget(QWidget):
         calendar = page_frame("calendar")
         calendar_layout = QHBoxLayout(calendar)
         calendar_layout.setContentsMargins(0, 0, 0, 0)
-        calendar_layout.setSpacing(12)
+        calendar_layout.setSpacing(16)
         calendar_month = QFrame()
         calendar_month.setStyleSheet(
-            "QFrame { background:#0d0e11; border-radius:14px; }")
+            "QFrame { background:#101114; border-radius:16px; }")
         month_layout = QVBoxLayout(calendar_month)
-        month_layout.setContentsMargins(10, 8, 10, 8)
+        month_layout.setContentsMargins(10, 6, 10, 8)
+        month_layout.setSpacing(3)
         month_header = QHBoxLayout()
         month_previous = QPushButton("‹")
         month_previous.clicked.connect(lambda: self._change_calendar_month(-1))
@@ -1903,41 +1910,50 @@ class JarvisWidget(QWidget):
         calendar_layout.addWidget(calendar_month, 3)
 
         calendar_side = QVBoxLayout()
+        calendar_side.setSpacing(7)
         self.dashboard_calendar_day = QLabel("Schedule")
         self.dashboard_calendar_day.setStyleSheet(
-            "font-size:16px; font-weight:750;")
+            "color:#a5a6ad; font-size:12px; font-weight:650;")
         calendar_side.addWidget(self.dashboard_calendar_day)
         self.dashboard_event_title = QLineEdit()
-        self.dashboard_event_title.setPlaceholderText("Event or task name")
+        self.dashboard_event_title.setPlaceholderText("Add an event or task")
+        self.dashboard_event_title.setFixedHeight(36)
+        self.dashboard_event_title.returnPressed.connect(
+            self._add_calendar_event)
         calendar_side.addWidget(self.dashboard_event_title)
         event_options = QHBoxLayout()
+        event_options.setSpacing(7)
         self.dashboard_event_kind = QComboBox()
         self.dashboard_event_kind.addItems(["Event", "Task", "Schedule"])
+        self.dashboard_event_kind.setFixedWidth(94)
+        self.dashboard_event_kind.setFixedHeight(32)
         self.dashboard_event_time = QDateTimeEdit(QDateTime.currentDateTime())
         self.dashboard_event_time.setCalendarPopup(True)
-        self.dashboard_event_time.setDisplayFormat("dd MMM yyyy  h:mm AP")
+        self.dashboard_event_time.setDisplayFormat("d MMM · h:mm AP")
+        self.dashboard_event_time.setFixedHeight(32)
         event_options.addWidget(self.dashboard_event_kind)
         event_options.addWidget(self.dashboard_event_time, 1)
-        calendar_side.addLayout(event_options)
-        reminder_row = QHBoxLayout()
-        reminder_row.addWidget(QLabel("Remind"))
         self.dashboard_event_reminder = QComboBox()
         self.dashboard_event_reminder.addItem("At time", 0)
         for minutes, label in ((5, "5 min before"), (10, "10 min before"),
                                (30, "30 min before"), (60, "1 hour before"),
                                (1440, "1 day before")):
             self.dashboard_event_reminder.addItem(label, minutes)
-        reminder_row.addWidget(self.dashboard_event_reminder, 1)
-        add_event = QPushButton("＋ Add")
+        self.dashboard_event_reminder.setFixedWidth(128)
+        self.dashboard_event_reminder.setFixedHeight(32)
+        event_options.addWidget(self.dashboard_event_reminder)
+        add_event = QPushButton("＋")
+        add_event.setFixedSize(36, 32)
+        add_event.setToolTip("Add reminder")
         add_event.setStyleSheet(
-            "background:#0a84ff; color:white; font-weight:700;")
+            "background:#0a84ff; color:white; border-radius:12px; font-weight:700;")
         add_event.clicked.connect(self._add_calendar_event)
-        reminder_row.addWidget(add_event)
-        calendar_side.addLayout(reminder_row)
+        event_options.addWidget(add_event)
+        calendar_side.addLayout(event_options)
         self.dashboard_event_list_host = QWidget()
         self.dashboard_event_list = QVBoxLayout(self.dashboard_event_list_host)
         self.dashboard_event_list.setContentsMargins(0, 0, 0, 0)
-        self.dashboard_event_list.setSpacing(5)
+        self.dashboard_event_list.setSpacing(4)
         self.dashboard_event_scroll = QScrollArea()
         self.dashboard_event_scroll.setWidgetResizable(True)
         self.dashboard_event_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2859,7 +2875,7 @@ class JarvisWidget(QWidget):
         if not hasattr(self, "_calendar_selected_date"):
             return
         selected = self._calendar_selected_date
-        self.dashboard_calendar_day.setText(selected.toString("dddd, d MMMM"))
+        self.dashboard_calendar_day.setText(selected.toString("ddd, d MMMM"))
         if sync_editor:
             current = self.dashboard_event_time.dateTime()
             current.setDate(selected)
@@ -2877,16 +2893,23 @@ class JarvisWidget(QWidget):
                 day_events.append((when, event))
         for when, event in sorted(day_events, key=lambda pair: pair[0]):
             row = QFrame()
-            row.setStyleSheet("QFrame { background:#17181c; border-radius:10px; }")
+            row.setFixedHeight(38)
+            row.setStyleSheet("QFrame { background:#151619; border-radius:10px; }")
             layout = QHBoxLayout(row)
-            layout.setContentsMargins(10, 6, 8, 6)
-            detail = QLabel(
-                f"{event.get('kind', 'Event')}  •  {when.toString('h:mm AP')}\n"
-                f"{event.get('title', '')}")
-            detail.setStyleSheet("font-size:12px;")
-            layout.addWidget(detail, 1)
+            layout.setContentsMargins(10, 4, 6, 4)
+            dot = QLabel("●")
+            dot.setFixedWidth(12)
+            dot.setStyleSheet("color:#0a84ff; font-size:8px;")
+            title = QLabel(event.get("title", ""))
+            title.setStyleSheet("font-size:12px; font-weight:600;")
+            title.setToolTip(event.get("kind", "Event"))
+            event_time = QLabel(when.toString("h:mm AP"))
+            event_time.setStyleSheet("color:#92939a; font-size:11px;")
+            layout.addWidget(dot)
+            layout.addWidget(title, 1)
+            layout.addWidget(event_time)
             remove = QPushButton("×")
-            remove.setFixedSize(28, 28)
+            remove.setFixedSize(26, 26)
             remove.setToolTip("Delete reminder")
             remove.clicked.connect(
                 lambda checked=False, event_id=event.get("id"):
@@ -2894,8 +2917,8 @@ class JarvisWidget(QWidget):
             layout.addWidget(remove)
             self.dashboard_event_list.addWidget(row)
         if not day_events:
-            empty = QLabel("No events · add one above")
-            empty.setStyleSheet("color:#777980; padding:12px;")
+            empty = QLabel("Nothing scheduled")
+            empty.setStyleSheet("color:#6f7077; padding:10px;")
             self.dashboard_event_list.addWidget(empty)
         self.dashboard_event_list.addStretch(1)
 
@@ -2932,7 +2955,7 @@ class JarvisWidget(QWidget):
             date_value = QDate(self._calendar_month_date.year(),
                                self._calendar_month_date.month(), day)
             button = QPushButton(str(day))
-            button.setFixedHeight(27)
+            button.setFixedHeight(25)
             selected = date_value == self._calendar_selected_date
             if selected:
                 button.setStyleSheet(
