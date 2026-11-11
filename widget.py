@@ -12,12 +12,12 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                         QFrame, QSizePolicy, QGraphicsDropShadowEffect, QInputDialog,
                              QGraphicsOpacityEffect, QSlider, QGridLayout,
                              QStackedWidget, QSystemTrayIcon, QMenu,
-                             QFileIconProvider, QStyle)
+                             QFileIconProvider, QStyle, QDateTimeEdit, QComboBox)
 from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSize,
                           QRect, QPropertyAnimation, QEasingCurve,
                           QParallelAnimationGroup, QVariantAnimation,
                           QRectF, QAbstractAnimation, QSettings, QEvent, QFileInfo,
-                          QMimeData, QUrl, QBuffer, QIODevice)
+                          QMimeData, QUrl, QBuffer, QIODevice, QDateTime, QDate)
 from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap, QAction, QDrag)
 
@@ -1692,7 +1692,8 @@ class JarvisWidget(QWidget):
         nav.setSpacing(5)
         self.dashboard_nav_buttons = {}
         nav_items = (("home", "⌂"), ("clipboard", "▣"),
-                     ("tasks", "✓"), ("focus", "◷"), ("transfer", "⇄"))
+                     ("tasks", "✓"), ("calendar", "▦"),
+                     ("focus", "◷"), ("transfer", "⇄"))
         for key, icon in nav_items:
             button = QPushButton(icon)
             button.setCheckable(True)
@@ -1870,6 +1871,82 @@ class JarvisWidget(QWidget):
         tasks_layout.addLayout(self.dashboard_task_list)
         tasks_layout.addStretch()
 
+        calendar = page_frame("calendar")
+        calendar_layout = QHBoxLayout(calendar)
+        calendar_layout.setContentsMargins(0, 0, 0, 0)
+        calendar_layout.setSpacing(12)
+        calendar_month = QFrame()
+        calendar_month.setStyleSheet(
+            "QFrame { background:#0d0e11; border-radius:14px; }")
+        month_layout = QVBoxLayout(calendar_month)
+        month_layout.setContentsMargins(10, 8, 10, 8)
+        month_header = QHBoxLayout()
+        month_previous = QPushButton("‹")
+        month_previous.clicked.connect(lambda: self._change_calendar_month(-1))
+        self.dashboard_calendar_month = QLabel()
+        self.dashboard_calendar_month.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dashboard_calendar_month.setStyleSheet("font-weight:750;")
+        month_next = QPushButton("›")
+        month_next.clicked.connect(lambda: self._change_calendar_month(1))
+        month_header.addWidget(month_previous)
+        month_header.addWidget(self.dashboard_calendar_month, 1)
+        month_header.addWidget(month_next)
+        month_layout.addLayout(month_header)
+        self.dashboard_calendar_grid = QGridLayout()
+        self.dashboard_calendar_grid.setSpacing(2)
+        month_layout.addLayout(self.dashboard_calendar_grid)
+        self._calendar_selected_date = QDate.currentDate()
+        self._calendar_month_date = QDate(
+            self._calendar_selected_date.year(),
+            self._calendar_selected_date.month(), 1)
+        self._render_calendar_month()
+        calendar_layout.addWidget(calendar_month, 3)
+
+        calendar_side = QVBoxLayout()
+        self.dashboard_calendar_day = QLabel("Schedule")
+        self.dashboard_calendar_day.setStyleSheet(
+            "font-size:16px; font-weight:750;")
+        calendar_side.addWidget(self.dashboard_calendar_day)
+        self.dashboard_event_title = QLineEdit()
+        self.dashboard_event_title.setPlaceholderText("Event or task name")
+        calendar_side.addWidget(self.dashboard_event_title)
+        event_options = QHBoxLayout()
+        self.dashboard_event_kind = QComboBox()
+        self.dashboard_event_kind.addItems(["Event", "Task", "Schedule"])
+        self.dashboard_event_time = QDateTimeEdit(QDateTime.currentDateTime())
+        self.dashboard_event_time.setCalendarPopup(True)
+        self.dashboard_event_time.setDisplayFormat("dd MMM yyyy  h:mm AP")
+        event_options.addWidget(self.dashboard_event_kind)
+        event_options.addWidget(self.dashboard_event_time, 1)
+        calendar_side.addLayout(event_options)
+        reminder_row = QHBoxLayout()
+        reminder_row.addWidget(QLabel("Remind"))
+        self.dashboard_event_reminder = QComboBox()
+        self.dashboard_event_reminder.addItem("At time", 0)
+        for minutes, label in ((5, "5 min before"), (10, "10 min before"),
+                               (30, "30 min before"), (60, "1 hour before"),
+                               (1440, "1 day before")):
+            self.dashboard_event_reminder.addItem(label, minutes)
+        reminder_row.addWidget(self.dashboard_event_reminder, 1)
+        add_event = QPushButton("＋ Add")
+        add_event.setStyleSheet(
+            "background:#0a84ff; color:white; font-weight:700;")
+        add_event.clicked.connect(self._add_calendar_event)
+        reminder_row.addWidget(add_event)
+        calendar_side.addLayout(reminder_row)
+        self.dashboard_event_list_host = QWidget()
+        self.dashboard_event_list = QVBoxLayout(self.dashboard_event_list_host)
+        self.dashboard_event_list.setContentsMargins(0, 0, 0, 0)
+        self.dashboard_event_list.setSpacing(5)
+        self.dashboard_event_scroll = QScrollArea()
+        self.dashboard_event_scroll.setWidgetResizable(True)
+        self.dashboard_event_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.dashboard_event_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.dashboard_event_scroll.setWidget(self.dashboard_event_list_host)
+        calendar_side.addWidget(self.dashboard_event_scroll, 1)
+        calendar_layout.addLayout(calendar_side, 4)
+
         clipboard = page_frame("clipboard")
         clipboard_layout = QVBoxLayout(clipboard)
         clipboard_layout.setContentsMargins(0, 0, 0, 0)
@@ -2039,6 +2116,11 @@ class JarvisWidget(QWidget):
         self.dashboard_buttons = self.dashboard_nav_buttons
         self._focus_minutes = 25
         self._load_dashboard_tasks()
+        self._load_calendar_events()
+        self._reminder_timer = QTimer(self)
+        self._reminder_timer.setInterval(15000)
+        self._reminder_timer.timeout.connect(self._check_calendar_reminders)
+        self._reminder_timer.start()
         self._load_pinned_clipboard()
         QApplication.clipboard().dataChanged.connect(self._capture_clipboard_change)
         QTimer.singleShot(0, self._capture_clipboard_change)
@@ -2555,6 +2637,9 @@ class JarvisWidget(QWidget):
                     "Screenshot copied — select it below to restore it")
         elif name == "search":
             QTimer.singleShot(80, self.dashboard_search_entry.setFocus)
+        elif name == "calendar":
+            self._refresh_calendar_day(sync_editor=False)
+            QTimer.singleShot(80, self.dashboard_event_title.setFocus)
         elif name == "transfer":
             count = len(self._file_shelf_paths)
             if not (self._transfer_server and self._transfer_server.running):
@@ -2725,6 +2810,170 @@ class JarvisWidget(QWidget):
     def _update_dashboard_task_count(self):
         count = len(getattr(self, "dashboard_task_buttons", []))
         self.dashboard_task_count.setText(f"{count} to do")
+
+    def _load_calendar_events(self):
+        raw = QSettings("Dexget", "DynamicIsland").value(
+            "calendar/events", "[]") or "[]"
+        try:
+            events = json.loads(str(raw))
+        except (TypeError, ValueError):
+            events = []
+        self._calendar_events = [event for event in events
+                                 if isinstance(event, dict)
+                                 and event.get("title") and event.get("time")]
+        self._refresh_calendar_day(sync_editor=False)
+
+    def _save_calendar_events(self):
+        QSettings("Dexget", "DynamicIsland").setValue(
+            "calendar/events", json.dumps(self._calendar_events))
+
+    def _add_calendar_event(self):
+        title = self.dashboard_event_title.text().strip()
+        if not title:
+            self.dashboard_event_title.setFocus()
+            return
+        when = self.dashboard_event_time.dateTime()
+        event = {
+            "id": str(time.time_ns()),
+            "title": title[:120],
+            "kind": self.dashboard_event_kind.currentText(),
+            "time": when.toString(Qt.DateFormat.ISODate),
+            "reminder": int(self.dashboard_event_reminder.currentData() or 0),
+            "notified": False,
+        }
+        self._calendar_events.append(event)
+        self._calendar_events.sort(key=lambda item: item.get("time", ""))
+        self._save_calendar_events()
+        self.dashboard_event_title.clear()
+        self._select_calendar_date(when.date())
+        self._refresh_calendar_day(sync_editor=False)
+        self._check_calendar_reminders()
+
+    def _remove_calendar_event(self, event_id):
+        self._calendar_events = [event for event in self._calendar_events
+                                 if event.get("id") != event_id]
+        self._save_calendar_events()
+        self._refresh_calendar_day(sync_editor=False)
+
+    def _refresh_calendar_day(self, sync_editor=True):
+        if not hasattr(self, "_calendar_selected_date"):
+            return
+        selected = self._calendar_selected_date
+        self.dashboard_calendar_day.setText(selected.toString("dddd, d MMMM"))
+        if sync_editor:
+            current = self.dashboard_event_time.dateTime()
+            current.setDate(selected)
+            self.dashboard_event_time.setDateTime(current)
+        while self.dashboard_event_list.count():
+            item = self.dashboard_event_list.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        day_events = []
+        for event in self._calendar_events:
+            when = QDateTime.fromString(event.get("time", ""),
+                                        Qt.DateFormat.ISODate)
+            if when.isValid() and when.date() == selected:
+                day_events.append((when, event))
+        for when, event in sorted(day_events, key=lambda pair: pair[0]):
+            row = QFrame()
+            row.setStyleSheet("QFrame { background:#17181c; border-radius:10px; }")
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(10, 6, 8, 6)
+            detail = QLabel(
+                f"{event.get('kind', 'Event')}  •  {when.toString('h:mm AP')}\n"
+                f"{event.get('title', '')}")
+            detail.setStyleSheet("font-size:12px;")
+            layout.addWidget(detail, 1)
+            remove = QPushButton("×")
+            remove.setFixedSize(28, 28)
+            remove.setToolTip("Delete reminder")
+            remove.clicked.connect(
+                lambda checked=False, event_id=event.get("id"):
+                self._remove_calendar_event(event_id))
+            layout.addWidget(remove)
+            self.dashboard_event_list.addWidget(row)
+        if not day_events:
+            empty = QLabel("No events · add one above")
+            empty.setStyleSheet("color:#777980; padding:12px;")
+            self.dashboard_event_list.addWidget(empty)
+        self.dashboard_event_list.addStretch(1)
+
+    def _change_calendar_month(self, months):
+        self._calendar_month_date = self._calendar_month_date.addMonths(months)
+        self._render_calendar_month()
+
+    def _select_calendar_date(self, selected):
+        self._calendar_selected_date = selected
+        self._calendar_month_date = QDate(selected.year(), selected.month(), 1)
+        self._render_calendar_month()
+        self._refresh_calendar_day()
+
+    def _render_calendar_month(self):
+        if not hasattr(self, "dashboard_calendar_grid"):
+            return
+        grid = self.dashboard_calendar_grid
+        while grid.count():
+            item = grid.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        self.dashboard_calendar_month.setText(
+            self._calendar_month_date.toString("MMMM yyyy"))
+        for column, name in enumerate(("M", "T", "W", "T", "F", "S", "S")):
+            label = QLabel(name)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet("color:#777980; font-size:10px;")
+            grid.addWidget(label, 0, column)
+        first_column = self._calendar_month_date.dayOfWeek() - 1
+        days = self._calendar_month_date.daysInMonth()
+        today = QDate.currentDate()
+        for day in range(1, days + 1):
+            date_value = QDate(self._calendar_month_date.year(),
+                               self._calendar_month_date.month(), day)
+            button = QPushButton(str(day))
+            button.setFixedHeight(27)
+            selected = date_value == self._calendar_selected_date
+            if selected:
+                button.setStyleSheet(
+                    "background:#0a84ff; color:white; border-radius:10px; padding:2px;")
+            elif date_value == today:
+                button.setStyleSheet(
+                    "color:#55b6ff; font-weight:750; padding:2px;")
+            else:
+                button.setStyleSheet("padding:2px;")
+            button.clicked.connect(
+                lambda checked=False, value=date_value:
+                self._select_calendar_date(value))
+            index = first_column + day - 1
+            grid.addWidget(button, index // 7 + 1, index % 7)
+
+    def _check_calendar_reminders(self):
+        if not getattr(self, "_calendar_events", None):
+            return
+        now = QDateTime.currentDateTime()
+        changed = False
+        for event in self._calendar_events:
+            if event.get("notified"):
+                continue
+            when = QDateTime.fromString(event.get("time", ""),
+                                        Qt.DateFormat.ISODate)
+            if not when.isValid():
+                continue
+            remind_at = when.addSecs(-60 * int(event.get("reminder", 0)))
+            if remind_at <= now <= when.addSecs(3600):
+                title = event.get("title", "Reminder")
+                detail = (f"{event.get('kind', 'Event')} · "
+                          f"{when.toString('ddd, d MMM · h:mm AP')}")
+                self.show_notification_activity("Dexget Calendar", title, detail)
+                if hasattr(self, "tray_icon"):
+                    self.tray_icon.showMessage(
+                        title, detail, QSystemTrayIcon.MessageIcon.Information,
+                        8000)
+                event["notified"] = True
+                changed = True
+        if changed:
+            self._save_calendar_events()
 
     def _load_pinned_clipboard(self):
         self.dashboard_clipboard_buttons = []

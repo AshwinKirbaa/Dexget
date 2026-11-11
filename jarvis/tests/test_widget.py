@@ -7,7 +7,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication, QPushButton, QSizePolicy
-from PyQt6.QtCore import QPoint, Qt, QSettings, QMimeData
+from PyQt6.QtCore import QPoint, Qt, QSettings, QMimeData, QDateTime
 from PyQt6.QtGui import QPixmap
 from jarvis.agent.agent import Agent
 from jarvis.agent.tool_registry import ToolRegistry
@@ -853,6 +853,44 @@ def test_default_island_expands_without_resource_summary():
         widget.media_worker.shutdown()
         widget.worker.wait(2000)
         widget.media_worker.wait(2000)
+        widget.close()
+        app.processEvents()
+
+
+def test_calendar_event_is_saved_listed_and_reminded():
+    app = QApplication.instance() or QApplication([])
+    settings = QSettings("Dexget", "DynamicIsland")
+    previous = settings.value("calendar/events", "[]")
+    settings.setValue("calendar/events", "[]")
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(
+            ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        when = QDateTime.currentDateTime().addSecs(30)
+        widget._select_calendar_date(when.date())
+        widget.dashboard_event_title.setText("Submit assignment")
+        widget.dashboard_event_kind.setCurrentText("Task")
+        widget.dashboard_event_time.setDateTime(when)
+        widget.dashboard_event_reminder.setCurrentIndex(0)
+        widget._add_calendar_event()
+        assert len(widget._calendar_events) == 1
+        assert widget._calendar_events[0]["title"] == "Submit assignment"
+        assert "Submit assignment" in json.dumps(
+            json.loads(settings.value("calendar/events")))
+        with patch.object(widget, "show_notification_activity") as notify:
+            widget.dashboard_event_time.setDateTime(QDateTime.currentDateTime())
+            widget._calendar_events[0]["time"] = QDateTime.currentDateTime().toString(
+                Qt.DateFormat.ISODate)
+            widget._calendar_events[0]["notified"] = False
+            widget._check_calendar_reminders()
+            notify.assert_called_once()
+    finally:
+        settings.setValue("calendar/events", previous)
+        widget.media_worker.shutdown()
+        widget.worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.wait(2000)
         widget.close()
         app.processEvents()
 
