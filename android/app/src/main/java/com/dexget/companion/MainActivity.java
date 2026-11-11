@@ -51,6 +51,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
+    public static final String ACTION_SCAN = "com.dexget.companion.SCAN";
+    public static final String ACTION_PICK_FILES = "com.dexget.companion.PICK_FILES";
+    public static final String ACTION_REFRESH = "com.dexget.companion.REFRESH";
     private static final int PICK_FILES = 41;
     private static final int CAMERA_PERMISSION = 42;
     private static final int WIFI_PERMISSION = 43;
@@ -74,7 +77,22 @@ public class MainActivity extends Activity {
         endpoint = prefs.getString("endpoint", "");
         setContentView(buildUi());
         renderPairing();
-        if (!endpoint.isEmpty()) refreshFiles();
+        handleLaunchAction(getIntent());
+        if (!endpoint.isEmpty() && !ACTION_PICK_FILES.equals(getIntent().getAction())) refreshFiles();
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleLaunchAction(intent);
+    }
+
+    private void handleLaunchAction(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (ACTION_SCAN.equals(action)) scanPairing();
+        else if (ACTION_PICK_FILES.equals(action)) chooseFiles();
+        else if (ACTION_REFRESH.equals(action)) refreshFiles();
     }
 
     private View buildUi() {
@@ -226,6 +244,7 @@ public class MainActivity extends Activity {
             endpoint = candidate.endsWith("/") ? candidate : candidate + "/";
             prefs.edit().putString("endpoint", endpoint).apply();
             renderPairing();
+            DexgetWidget.updateAll(this);
             refreshFiles();
         } catch (Exception error) {
             status.setText("Invalid pairing code: " + error.getMessage());
@@ -252,6 +271,7 @@ public class MainActivity extends Activity {
                 prefs.edit().putString("endpoint", endpoint).apply();
                 runOnUiThread(() -> {
                     renderPairing();
+                    DexgetWidget.updateAll(this);
                     refreshFiles();
                 });
             } catch (Exception ignored) {
@@ -301,7 +321,11 @@ public class MainActivity extends Activity {
                 pendingSsid = pendingPassword = pendingTarget = null;
                 endpoint = target.endsWith("/") ? target : target + "/";
                 prefs.edit().putString("endpoint", endpoint).apply();
-                runOnUiThread(() -> { renderPairing(); refreshFiles(); });
+                runOnUiThread(() -> {
+                    renderPairing();
+                    DexgetWidget.updateAll(this);
+                    refreshFiles();
+                });
             }
             @Override public void onUnavailable() {
                 wifiConnectionRequested = false;
