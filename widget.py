@@ -34,6 +34,7 @@ class MacroPlaybackWorker(QThread):
         super().__init__()
         self.actions = list(actions)
         self._cancelled = threading.Event()
+        self._current_step = 0
 
     def cancel(self):
         self._cancelled.set()
@@ -55,14 +56,17 @@ class MacroPlaybackWorker(QThread):
         control_type = cls._control_value(control, "ControlTypeName")
         class_name = cls._control_value(control, "ClassName")
         if target.get("automation_id"):
-            if automation_id != target["automation_id"]:
+            # Electron/browser controls may receive a different generated id
+            # on every launch. Exact ids are strongest, but a stable accessible
+            # name in the same window is still a valid recovery path.
+            if automation_id == target["automation_id"]:
+                score += 140
+            elif not target.get("name"):
                 return -1
-            score += 120
         if target.get("name"):
-            if not target.get("automation_id") and name != target["name"]:
+            if name != target["name"]:
                 return -1
-            if name == target["name"]:
-                score += 80
+            score += 100
         if target.get("control_type") and control_type == target["control_type"]:
             score += 24
         if target.get("class_name") and class_name == target["class_name"]:
@@ -87,14 +91,39 @@ class MacroPlaybackWorker(QThread):
                 root,
                 bool(preferred_window and preferred_window in
                      self._control_value(root, "Name").casefold()),
+                self._rect_tuple(root),
             ) for root in roots]
             visited = 0
             while pending and visited < 4000:
-                control, window_match = pending.pop(0)
+                control, window_match, window_rect = pending.pop(0)
                 visited += 1
                 score = self._target_score(control, target)
                 if window_match:
                     score += 50
+                recorded_relative = target.get("window_relative")
+                id_changed = bool(
+                    target.get("automation_id") and
+                    self._control_value(control, "AutomationId") !=
+                    target.get("automation_id"))
+                if id_changed:
+                    # A changed generated id is accepted only if the named
+                    # control remains near its recorded relative location.
+                    control_rect = self._rect_tuple(control)
+                    if (not window_rect or not control_rect or
+                            not isinstance(recorded_relative, (list, tuple)) or
+                            len(recorded_relative) != 2):
+                        score = -1
+                    else:
+                        wl, wt, wr, wb = window_rect
+                        cl, ct, cr, cb = control_rect
+                        current_x = ((cl + cr) / 2 - wl) / (wr - wl)
+                        current_y = ((ct + cb) / 2 - wt) / (wb - wt)
+                        distance = abs(current_x - float(recorded_relative[0])) + abs(
+                            current_y - float(recorded_relative[1]))
+                        if distance > 0.35:
+                            score = -1
+                        else:
+                            score += int(80 * (1.0 - distance / 0.35))
                 if score > best_score:
                     try:
                         available = bool(control.IsEnabled) and not bool(control.IsOffscreen)
@@ -103,35 +132,83 @@ class MacroPlaybackWorker(QThread):
                     if available:
                         best, best_score = control, score
                 try:
-                    pending.extend((child, window_match)
+                    pending.extend((child, window_match, window_rect)
                                    for child in control.GetChildren())
                 except Exception:
                     pass
             # A matching name or automation id plus the control type is strong
             # enough; never click a weak type-only match.
-            if best is not None and best_score >= 80:
+            if best is not None and best_score >= 100:
                 return best
             self._cancelled.wait(0.2)
         return None
+
+    @staticmethod
+    def _rect_tuple(control):
+        try:
+            rect = control.BoundingRectangle
+            values = tuple(float(getattr(rect, name))
+                           for name in ("left", "top", "right", "bottom"))
+            if values[2] > values[0] and values[3] > values[1]:
+                return values
+        except Exception:
+            pass
+        return None
+
+    def _relative_window_click(self, auto, target, button="left"):
+        """Fallback for canvas/Electron surfaces, relative to the live window."""
+        relative = target.get("window_relative")
+        window_name = str(target.get("window", "")).casefold()
+        if (not isinstance(relative, (list, tuple)) or len(relative) != 2 or
+                not window_name):
+            return False
+        try:
+            windows = list(auto.GetRootControl().GetChildren())
+        except Exception:
+            return False
+        candidates = []
+        for window in windows:
+            live_name = self._control_value(window, "Name").casefold()
+            if live_name == window_name:
+                candidates.insert(0, window)
+            elif window_name in live_name or live_name in window_name:
+                candidates.append(window)
+        for window in candidates:
+            rect = self._rect_tuple(window)
+            if not rect:
+                continue
+            left, top, right, bottom = rect
+            x = left + max(0.0, min(float(relative[0]), 1.0)) * (right - left)
+            y = top + max(0.0, min(float(relative[1]), 1.0)) * (bottom - top)
+            import pyautogui
+            pyautogui.click(int(x), int(y), button=button)
+            return True
+        return False
 
     def _smart_click(self, auto, action):
         target = action.get("target")
         if not isinstance(target, dict):
             return False
-        control = self._find_target(auto, target, action.get("timeout", 15.0))
-        if control is None:
-            identity = target.get("name") or target.get("automation_id") or "control"
-            raise RuntimeError(f'Could not find an available "{identity}" button')
-        control.SetFocus()
-        try:
-            pattern = control.GetInvokePattern()
-            if pattern:
-                pattern.Invoke()
-                return True
-        except Exception:
-            pass
-        control.Click(simulateMove=False)
-        return True
+        control = None
+        if target.get("actionable", True):
+            control = self._find_target(
+                auto, target, action.get("timeout", 15.0))
+        if control is not None:
+            control.SetFocus()
+            try:
+                pattern = control.GetInvokePattern()
+                if pattern:
+                    pattern.Invoke()
+                    return True
+            except Exception:
+                pass
+            control.Click(simulateMove=False)
+            return True
+        if self._relative_window_click(
+                auto, target, str(action.get("button", "left"))):
+            return True
+        identity = target.get("name") or target.get("automation_id") or "control"
+        raise RuntimeError(f'could not find an available "{identity}" control')
 
     def run(self):
         try:
@@ -146,7 +223,8 @@ class MacroPlaybackWorker(QThread):
                 initializer = None
             try:
                 skip_mouse_up = set()
-                for action in self.actions:
+                for step_index, action in enumerate(self.actions, start=1):
+                    self._current_step = step_index
                     if self._cancelled.is_set():
                         self.playback_finished.emit(False, "Automation cancelled")
                         return
@@ -187,7 +265,10 @@ class MacroPlaybackWorker(QThread):
                         pass
             self.playback_finished.emit(True, "Automation completed")
         except Exception as exc:
-            self.playback_finished.emit(False, f"Automation stopped: {exc}")
+            self.playback_finished.emit(
+                False,
+                f"Automation stopped at step {self._current_step}/"
+                f"{len(self.actions)}: {exc}")
 
 
 class MediaControlButton(QPushButton):
@@ -3669,15 +3750,29 @@ class JarvisWidget(QWidget):
                     "control_type": str(control.ControlTypeName or ""),
                     "class_name": str(control.ClassName or ""),
                 }
+                actionable_types = {
+                    "ButtonControl", "MenuItemControl", "HyperlinkControl",
+                    "CheckBoxControl", "RadioButtonControl", "TabItemControl",
+                    "ListItemControl", "ComboBoxControl", "EditControl",
+                }
+                target["actionable"] = target["control_type"] in actionable_types
                 parent = control
                 for _ in range(10):
                     if not parent:
                         break
                     if str(parent.ControlTypeName or "") == "WindowControl":
                         target["window"] = str(parent.Name or "")
+                        rect = MacroPlaybackWorker._rect_tuple(parent)
+                        if rect:
+                            left, top, right, bottom = rect
+                            target["window_relative"] = [
+                                round((float(x) - left) / (right - left), 5),
+                                round((float(y) - top) / (bottom - top), 5),
+                            ]
                         break
                     parent = parent.GetParentControl()
-                if not target["name"] and not target["automation_id"]:
+                if (not target["name"] and not target["automation_id"] and
+                        "window_relative" not in target):
                     return None
                 return target
         except Exception:
