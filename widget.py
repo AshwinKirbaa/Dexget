@@ -4336,10 +4336,12 @@ class JarvisWidget(QWidget):
         self.expand_btn.setText("⌄")
         self._animate_to(self._compact_size(), self.COMPACT_TRANSITION_MS)
 
-    def hide_idle_island(self):
-        # The idle surface is now a permanent hardware-style notch. Activities
-        # expand from it and return here instead of removing the island.
-        if self._is_default_activity():
+    def hide_idle_island(self, force=False):
+        # Keep the hardware-style notch permanent by default. It may only
+        # disappear after an explicit upward swipe, or when Auto-hide has been
+        # enabled in Notch Settings.
+        may_hide = bool(force or self._pref("behavior/auto_hide", False))
+        if self._is_default_activity() and not may_hide:
             self._auto_hidden = False
             self._hover_leave_at = None
             self.setWindowOpacity(1.0)
@@ -4352,14 +4354,18 @@ class JarvisWidget(QWidget):
             if self.size() != self.COLLAPSED_SIZE:
                 self._animate_to(self.COLLAPSED_SIZE, self.COMPACT_TRANSITION_MS)
             return
-        if (self.worker.busy.is_set()
+        if not may_hide:
+            return
+        if (not force and (self.worker.busy.is_set()
                 or self._call_context
                 or self._timer_active
                 or (self._media and self._media.get("playing") and not self._media_manually_hidden)
-                or not self.confirmation_panel.isHidden()):
+                or not self.confirmation_panel.isHidden())):
             return
         self.is_expanded = False
         self._auto_hidden = True
+        if force:
+            self._media_manually_hidden = True
         self._hover_leave_at = None
         self.scroll_area.hide()
         self.input_frame.hide()
@@ -4959,6 +4965,8 @@ class JarvisWidget(QWidget):
 
     def hide_call_island(self):
         """Minimize a call activity while continuing to track the call."""
+        if not self._pref("behavior/auto_hide", False):
+            return
         if (not self._call_context or self._media or self.is_expanded
                 or self.worker.busy.is_set() or self._notification_active
                 or self._charging_active or self._low_power_active
@@ -5653,8 +5661,12 @@ class JarvisWidget(QWidget):
             return
         start = self._swipe_start_pos
         self._swipe_start_pos = None
-        delta_x = event.globalPosition().toPoint().x() - start.x()
-        if delta_x <= -55:
+        end = event.globalPosition().toPoint()
+        delta_x = end.x() - start.x()
+        delta_y = end.y() - start.y()
+        if delta_y <= -35 and abs(delta_y) > abs(delta_x):
+            self.hide_idle_island(force=True)
+        elif delta_x <= -55:
             self._cycle_activity_page(-1)
         elif delta_x >= 55:
             self._cycle_activity_page(1)
@@ -5855,6 +5867,11 @@ class JarvisWidget(QWidget):
             if start is not None:
                 point = event.globalPosition().toPoint()
                 delta_x = point.x() - start.x()
+                delta_y = point.y() - start.y()
+                if delta_y <= -35 and abs(delta_y) > abs(delta_x) and self.isVisible():
+                    self._swipe_start_pos = None
+                    self.hide_idle_island(force=True)
+                    return True
                 if abs(delta_x) >= 55 and self.isVisible():
                     self._swipe_start_pos = None
                     self._cycle_activity_page(1 if delta_x > 0 else -1)

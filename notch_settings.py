@@ -24,6 +24,7 @@ DEFAULTS = {
     "features/calendar": True,
     "features/phone_transfer": True,
     "behavior/hover_reveal": True,
+    "behavior/auto_hide": False,
     "behavior/auto_collapse": True,
     "behavior/auto_collapse_ms": 1800,
     "behavior/notification_ms": 5200,
@@ -159,6 +160,7 @@ class NotchSettingsWindow(QMainWindow):
         page, layout = self._page("Control when the notch appears, expands and hides.")
         form = QFormLayout()
         self._check(form, "behavior/hover_reveal", "Reveal from top-edge hover")
+        self._check(form, "behavior/auto_hide", "Automatically hide the compact notch")
         self._check(form, "behavior/auto_collapse", "Automatically collapse inactive panels")
         self._check(form, "behavior/always_on_top", "Keep notch above other windows")
         self._check(form, "behavior/start_collapsed", "Start in compact mode")
