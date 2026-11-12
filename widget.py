@@ -185,6 +185,61 @@ class MacroPlaybackWorker(QThread):
             return True
         return False
 
+    def _tab_to_target(self, auto, target, limit=48):
+        """Find an accessible control through the app's keyboard focus order."""
+        window_name = str(target.get("window", "")).casefold()
+        if not window_name or not (target.get("name") or target.get("automation_id")):
+            return False
+        try:
+            windows = list(auto.GetRootControl().GetChildren())
+        except Exception:
+            return False
+        window = next((item for item in windows
+                       if self._control_value(item, "Name").casefold() == window_name), None)
+        if window is None:
+            window = next((item for item in windows
+                           if window_name in self._control_value(
+                               item, "Name").casefold()), None)
+        if window is None:
+            return False
+        try:
+            window.SetFocus()
+        except Exception:
+            return False
+        import pyautogui
+        seen = set()
+        for _ in range(max(1, int(limit))):
+            if self._cancelled.is_set():
+                return False
+            try:
+                focused = auto.GetFocusedControl()
+                identity = (
+                    self._control_value(focused, "AutomationId"),
+                    self._control_value(focused, "Name"),
+                    self._control_value(focused, "ControlTypeName"),
+                )
+                score = self._target_score(focused, target)
+                available = bool(focused.IsEnabled) and not bool(focused.IsOffscreen)
+                if score >= 100 and available:
+                    try:
+                        pattern = focused.GetInvokePattern()
+                        if pattern:
+                            pattern.Invoke()
+                            return True
+                    except Exception:
+                        pass
+                    pyautogui.press("enter")
+                    return True
+                if identity in seen and len(seen) > 1:
+                    return False
+                seen.add(identity)
+            except Exception:
+                pass
+            pyautogui.press("tab")
+            if self._cancelled.wait(0.06):
+                return False
+        return False
+
     def _smart_click(self, auto, action):
         target = action.get("target")
         if not isinstance(target, dict):
@@ -203,6 +258,8 @@ class MacroPlaybackWorker(QThread):
             except Exception:
                 pass
             control.Click(simulateMove=False)
+            return True
+        if self._tab_to_target(auto, target):
             return True
         if self._relative_window_click(
                 auto, target, str(action.get("button", "left"))):
