@@ -19,7 +19,7 @@ from PyQt6.QtCore import (Qt, QPoint, QPointF, QThread, pyqtSignal, QTimer, QSiz
                           QParallelAnimationGroup, QVariantAnimation,
                           QRectF, QAbstractAnimation, QSettings, QEvent, QFileInfo,
                           QMimeData, QUrl, QBuffer, QIODevice, QDateTime, QDate)
-from PyQt6.QtGui import (QColor, QFont, QIcon, QPainter, QBrush, QPen,
+from PyQt6.QtGui import (QColor, QFont, QFontMetrics, QIcon, QPainter, QBrush, QPen,
                          QPainterPath, QRegion, QCursor, QPixmap, QAction, QDrag)
 
 import jarvis_integration
@@ -1208,7 +1208,9 @@ class JarvisWidget(QWidget):
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)
     HEADSET_SIZE = QSize(350, 56)
-    NOTIFICATION_SIZE = QSize(420, 88)
+    # Notifications need enough room for an app name, headline and two detail
+    # lines. The older 420x88 surface clipped the last line below the frame.
+    NOTIFICATION_SIZE = QSize(520, 108)
     CALL_SIZE = QSize(360, 52)
     TIMER_SIZE = QSize(270, 58)
     MEDIA_MIN_WIDTH = 400
@@ -1580,28 +1582,29 @@ class JarvisWidget(QWidget):
         self.low_power_battery.hide()
 
         self.notification_icon = QLabel("N")
-        self.notification_icon.setFixedSize(42, 42)
+        self.notification_icon.setFixedSize(52, 52)
         self.notification_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.notification_icon.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
         self.notification_icon.setStyleSheet(
             "background: #6677a8; color: white; border-radius: 12px;")
         self.notification_badge = QLabel("●", self.notification_icon)
-        self.notification_badge.setGeometry(28, 27, 14, 14)
+        self.notification_badge.setGeometry(37, 37, 14, 14)
         self.notification_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.notification_badge.setStyleSheet(
             "color: #30d158; background: #0b0d11; border-radius: 7px;")
         self.notification_identity = QWidget()
         notification_layout = QVBoxLayout(self.notification_identity)
-        notification_layout.setContentsMargins(0, 4, 0, 4)
-        notification_layout.setSpacing(1)
+        notification_layout.setContentsMargins(0, 8, 0, 8)
+        notification_layout.setSpacing(2)
         self.notification_title = QLabel("Notification")
-        self.notification_title.setMaximumWidth(290)
-        self.notification_title.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self.notification_title.setMaximumWidth(340)
+        self.notification_title.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.notification_title.setStyleSheet("color: white;")
         self.notification_body = QLabel("")
-        self.notification_body.setMaximumWidth(290)
-        self.notification_body.setMaximumHeight(48)
-        self.notification_body.setWordWrap(True)
+        self.notification_body.setMaximumWidth(340)
+        self.notification_body.setMinimumHeight(54)
+        self.notification_body.setMaximumHeight(54)
+        self.notification_body.setWordWrap(False)
         self.notification_body.setFont(QFont("Segoe UI", 9))
         self.notification_body.setStyleSheet("color: #aeb5bf;")
         notification_layout.addWidget(self.notification_title)
@@ -1611,7 +1614,7 @@ class JarvisWidget(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         self.notification_time.setFont(QFont("Segoe UI", 8))
         self.notification_time.setStyleSheet("color: #8d95a1;")
-        self.notification_time.setFixedWidth(58)
+        self.notification_time.setFixedWidth(72)
         self.notification_icon.hide()
         self.notification_identity.hide()
         self.notification_time.hide()
@@ -4599,6 +4602,13 @@ class JarvisWidget(QWidget):
 
     def expand_feature(self):
         """Expand the activity represented by the compact island."""
+        # A notification is already a complete card. Expanding it used to
+        # repeat the same title and body in a second panel underneath the
+        # compact header. Keep the clean card visible instead.
+        if self._notification_active:
+            self._notification_hide_timer.start(
+                self._pref("behavior/notification_ms", 5200))
+            return
         self._collapse_timer.stop()
         self._call_hide_timer.stop()
         self._auto_hidden = False
@@ -5303,6 +5313,32 @@ class JarvisWidget(QWidget):
         else:
             self.hide_media_island()
 
+    def _notification_message(self, headline, detail, width=340):
+        """Return at most three readable, individually elided message lines."""
+        font_metrics = QFontMetrics(self.notification_body.font())
+        raw_lines = [str(headline or "New notification").strip()]
+        raw_lines.extend(
+            line.strip() for line in str(detail or "").splitlines() if line.strip())
+        # A single long detail sentence may wrap naturally at sensible word
+        # boundaries, but never let it push content outside the notch.
+        if len(raw_lines) == 2 and font_metrics.horizontalAdvance(raw_lines[1]) > width:
+            words = raw_lines.pop().split()
+            current = ""
+            for word in words:
+                candidate = f"{current} {word}".strip()
+                if current and font_metrics.horizontalAdvance(candidate) > width:
+                    raw_lines.append(current)
+                    current = word
+                else:
+                    current = candidate
+            if current:
+                raw_lines.append(current)
+        visible = raw_lines[:3]
+        if len(raw_lines) > 3 and visible:
+            visible[-1] = f"{visible[-1]}…"
+        return "\n".join(font_metrics.elidedText(
+            line, Qt.TextElideMode.ElideRight, width) for line in visible)
+
     def show_notification_activity(self, app_name, title, body):
         if not self._feature_enabled("notifications"):
             return
@@ -5336,14 +5372,23 @@ class JarvisWidget(QWidget):
                         % len(palette)]
         self.notification_icon.setText(initials)
         self.notification_icon.setStyleSheet(
-            f"background: {color}; color: white; border-radius: 12px;")
-        self.notification_title.setText(app_name[:42])
+            f"background: {color}; color: white; border-radius: 15px;")
+        palette_values = self._theme_palette()
+        self.notification_title.setStyleSheet(
+            f"color: {palette_values['text']}; background: transparent;")
+        self.notification_body.setStyleSheet(
+            f"color: {palette_values['muted']}; background: transparent;")
+        self.notification_time.setStyleSheet(
+            f"color: {palette_values['muted']}; background: transparent;")
+        title_metrics = QFontMetrics(self.notification_title.font())
+        self.notification_title.setText(title_metrics.elidedText(
+            app_name, Qt.TextElideMode.ElideRight, 340))
         headline = (title or "New notification").strip()
         detail = (body or "").strip()
-        message = headline
-        if detail and detail.casefold() not in (headline.casefold(), app_name.casefold()):
-            message = f"{headline}\n{detail}"
-        self.notification_body.setText(message[:150])
+        if detail.casefold() in (headline.casefold(), app_name.casefold()):
+            detail = ""
+        self.notification_body.setText(
+            self._notification_message(headline, detail))
         from datetime import datetime
         self.notification_time.setText(
             datetime.now().strftime("%I:%M %p").lstrip("0"))

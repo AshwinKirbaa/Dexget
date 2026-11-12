@@ -1306,3 +1306,33 @@ def test_file_shelf_holds_local_file_and_restores_default_notch(tmp_path):
         assert widget.worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_notification_card_fits_three_lines_without_duplicate_expansion():
+    app = QApplication.instance() or QApplication([])
+    with patch("widget.jarvis_integration.build_agent") as build:
+        build.side_effect = lambda **kwargs: Agent(
+            ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
+        widget = JarvisWidget()
+    try:
+        widget.show_notification_activity(
+            "Snipping Tool",
+            "Screenshot copied to clipboard",
+            "Automatically saved to screenshots folder with a long trailing detail")
+        app.processEvents()
+        assert widget.size() == widget.NOTIFICATION_SIZE
+        assert widget.title_bar.height() == widget.NOTIFICATION_SIZE.height()
+        assert widget.notification_body.height() >= 54
+        assert 1 <= len(widget.notification_body.text().splitlines()) <= 3
+        widget.expand_feature()
+        app.processEvents()
+        assert not widget.is_expanded
+        assert widget.feature_panel.isHidden()
+    finally:
+        widget._notification_hide_timer.stop()
+        widget.media_worker.shutdown()
+        widget.media_worker.wait(2000)
+        widget.worker.shutdown()
+        assert widget.worker.wait(2000)
+        widget.close()
+        app.processEvents()
