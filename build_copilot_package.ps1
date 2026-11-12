@@ -67,7 +67,7 @@ $manifest = @"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10">
 
-  <Identity Name="JarvisAI" Publisher="CN=JarvisDev" Version="1.0.147.0" ProcessorArchitecture="$packageArch"/>
+  <Identity Name="JarvisAI" Publisher="CN=JarvisDev" Version="1.0.148.0" ProcessorArchitecture="$packageArch"/>
   
   <Properties>
     <DisplayName>JARVIS</DisplayName>

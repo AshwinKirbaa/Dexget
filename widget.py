@@ -5418,9 +5418,17 @@ class JarvisWidget(QWidget):
             return
         try:
             import winsound
-            winsound.PlaySound(
-                self._pref("sound/notification", "SystemNotification"),
-                winsound.SND_ALIAS | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+            custom_file = str(self._pref("sound/custom_file", "") or "").strip()
+            if custom_file and os.path.isfile(custom_file):
+                winsound.PlaySound(
+                    custom_file,
+                    winsound.SND_FILENAME | winsound.SND_ASYNC |
+                    winsound.SND_NODEFAULT)
+            else:
+                winsound.PlaySound(
+                    self._pref("sound/notification", "SystemNotification"),
+                    winsound.SND_ALIAS | winsound.SND_ASYNC |
+                    winsound.SND_NODEFAULT)
         except Exception:
             try:
                 import winsound

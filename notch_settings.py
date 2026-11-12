@@ -1,14 +1,15 @@
 """Dedicated preferences application for the Dexget Dynamic Island."""
 
+import os
 import sys
 import time
 
 from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFormLayout, QFrame, QHBoxLayout,
-    QLabel, QMainWindow, QPushButton, QScrollArea, QSlider, QSpinBox,
-    QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame,
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea,
+    QSlider, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 
@@ -32,6 +33,7 @@ DEFAULTS = {
     "behavior/start_collapsed": True,
     "sound/enabled": True,
     "sound/notification": "SystemNotification",
+    "sound/custom_file": "",
     "appearance/theme": "Midnight",
     "appearance/accent": "Sky",
     "appearance/opacity": 100,
@@ -171,13 +173,32 @@ class NotchSettingsWindow(QMainWindow):
         return page
 
     def _sound_page(self):
-        page, layout = self._page("Use the Windows sound theme or silence notch notifications.")
+        page, layout = self._page(
+            "Choose a Windows sound or use a custom WAV file from this computer.")
         form = QFormLayout()
         self._check(form, "sound/enabled", "Play notification sounds")
         combo = QComboBox()
         combo.addItems(("SystemNotification", "SystemAsterisk", "SystemExclamation", "SystemHand"))
         self.controls["sound/notification"] = combo
         form.addRow("Notification sound", combo)
+
+        custom_row = QWidget()
+        custom_layout = QHBoxLayout(custom_row)
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_layout.setSpacing(8)
+        custom_file = QLineEdit()
+        custom_file.setReadOnly(True)
+        custom_file.setPlaceholderText("No custom sound selected")
+        custom_file.setToolTip("Custom notification sound (WAV)")
+        self.controls["sound/custom_file"] = custom_file
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._browse_sound)
+        clear = QPushButton("Clear")
+        clear.clicked.connect(custom_file.clear)
+        custom_layout.addWidget(custom_file, 1)
+        custom_layout.addWidget(browse)
+        custom_layout.addWidget(clear)
+        form.addRow("Custom sound", custom_row)
         layout.addLayout(form)
         layout.addStretch()
         return page
@@ -257,6 +278,8 @@ class NotchSettingsWindow(QMainWindow):
             elif isinstance(control, QComboBox):
                 index = control.findText(str(value))
                 control.setCurrentIndex(max(0, index))
+            elif isinstance(control, QLineEdit):
+                control.setText(str(value))
 
     def _save(self):
         for key, control in self.controls.items():
@@ -264,6 +287,8 @@ class NotchSettingsWindow(QMainWindow):
                 value = control.isChecked()
             elif isinstance(control, (QSpinBox, QSlider)):
                 value = control.value()
+            elif isinstance(control, QLineEdit):
+                value = control.text().strip()
             else:
                 value = control.currentText()
             self.store.setValue(f"preferences/{key}", value)
@@ -281,11 +306,29 @@ class NotchSettingsWindow(QMainWindow):
             return
         try:
             import winsound
-            winsound.PlaySound(
-                self.controls["sound/notification"].currentText(),
-                winsound.SND_ALIAS | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+            custom_file = self.controls["sound/custom_file"].text().strip()
+            if custom_file and os.path.isfile(custom_file):
+                winsound.PlaySound(
+                    custom_file,
+                    winsound.SND_FILENAME | winsound.SND_ASYNC |
+                    winsound.SND_NODEFAULT)
+            else:
+                winsound.PlaySound(
+                    self.controls["sound/notification"].currentText(),
+                    winsound.SND_ALIAS | winsound.SND_ASYNC |
+                    winsound.SND_NODEFAULT)
         except Exception:
             pass
+
+    def _browse_sound(self):
+        current = self.controls["sound/custom_file"].text().strip()
+        start_at = os.path.dirname(current) if current else ""
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Choose notification sound", start_at,
+            "Wave audio (*.wav);;All files (*)")
+        if filename:
+            self.controls["sound/custom_file"].setText(
+                os.path.normpath(filename))
 
 
 def run_settings_app():
