@@ -601,12 +601,20 @@ def test_notification_live_activity_shows_content_and_restores_state():
         build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
         widget = JarvisWidget()
     try:
+        # Reproduce the real failure: a held file/default-page override used
+        # to outrank the notification and collapse it to the 220x34 shelf.
+        widget._file_shelf_paths = [r"C:\held-file.txt"]
+        widget._default_page_override = True
+        widget._activity_page = "default"
         with patch.object(widget, "_play_notification_sound") as sound:
             widget.show_notification_activity(
                 "WhatsApp", "New message", "Ashwin: Hello")
             sound.assert_called_once_with()
+        app.processEvents()
         assert widget._notification_active
         assert widget._compact_size() == widget.NOTIFICATION_SIZE
+        assert widget.size() == widget.NOTIFICATION_SIZE
+        assert widget.file_shelf_widget.isHidden()
         assert widget.notification_icon.text() == "W"
         assert widget.notification_title.text() == "WhatsApp"
         assert widget.notification_body.text() == "New message\nAshwin: Hello"

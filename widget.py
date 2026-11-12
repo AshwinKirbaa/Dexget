@@ -2983,7 +2983,11 @@ class JarvisWidget(QWidget):
     def _sync_compact_surface(self):
         shelf_visible = bool(self._file_shelf_paths and
                              (self._default_page_override or
-                              self._activity_page == "default"))
+                              self._activity_page == "default") and
+                             not any((self._notification_active,
+                                      self._headset_active,
+                                      self._low_power_active,
+                                      self._charging_active)))
         default = bool(not shelf_visible and (self._default_page_override or
                         (self._activity_page == "default" and self._is_default_activity()))
                        and not any((self._notification_active, self._headset_active,
@@ -4307,10 +4311,9 @@ class JarvisWidget(QWidget):
                 self._queue_local_search()
 
     def _compact_size(self):
-        if self._file_shelf_paths and self._displaying_default_page():
-            return self.FILE_SHELF_SIZE
-        if self._displaying_default_page():
-            return self.COLLAPSED_SIZE
+        # Transient live activities must win over the selected/default page.
+        # Otherwise a routine status refresh can resize a notification back to
+        # the tiny notch while it is still visible, clipping all of its text.
         if self._notification_active:
             return self.NOTIFICATION_SIZE
         if self._headset_active:
@@ -4319,6 +4322,10 @@ class JarvisWidget(QWidget):
             return self.LOW_POWER_SIZE
         if self._charging_active:
             return self.CHARGING_SIZE
+        if self._file_shelf_paths and self._displaying_default_page():
+            return self.FILE_SHELF_SIZE
+        if self._displaying_default_page():
+            return self.COLLAPSED_SIZE
         if self._timer_active and self._activity_page == "timer":
             return self.TIMER_SIZE
         if self._call_context and not self._media:
