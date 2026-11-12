@@ -1,11 +1,50 @@
-# JARVIS
+# Dexget
 
-JARVIS is a desktop-integrated AI assistant widget for Windows. It provides voice interaction, continuous listening, desktop automation, and intelligent task execution via local and remote LLMs.
+Dexget is a Windows 11 Dynamic Island and local desktop assistant. It places a compact notch at the top of the screen and changes its interface for media, timers, notifications, charging, battery warnings, connected headsets, files, reminders, and assistant tasks.
 
-## Local agent setup
+The project is local-first. Deterministic Windows actions run without an LLM, while natural-language questions and complex automation can use a local Ollama model only when needed.
 
-The default planner uses Ollama only. No paid API key is required. Ollama is already
-usable if `python main.py --doctor` reports `"local_model_ready": true`.
+## Highlights
+
+### Dynamic Island
+
+- Compact clock and battery notch at the top of the screen.
+- Contextual layouts for media, timers, notifications, charging, battery warnings, connected headsets, reminders, and phone transfers.
+- Media artwork, title, artist, timeline, seeking, play/pause, previous, and next controls.
+- Notification cards with application identity, timestamp, message preview, optional sound, and configurable persistence.
+- Multiple activity pages so media, timers, and the default dashboard remain independently accessible.
+- Configurable swipe, hover, auto-hide, dimensions, appearance, sound, and feature visibility in the separate Notch Settings app.
+
+### Dashboard and productivity
+
+- Quick Launch entries for applications, scripts, keyboard shortcuts, and recorded automations.
+- Calendar-style reminders for events, tasks, and schedules.
+- Clipboard history for copied text and screenshots, with Copy, Pin, and Clear controls. Pinned entries stay at the top.
+- Local search for applications, files, folders, executables, and videos across available drives.
+- Temporary multi-file shelf: drag files into the notch, navigate elsewhere, then drag them out at the destination.
+- QR-based phone transfer with an Android companion app.
+
+### Windows and AI controls
+
+- Open applications, folders, files, URLs, and Windows Settings pages.
+- List, create, copy, move, paste, and guarded-delete file operations.
+- Volume, brightness, storage, battery, specifications, and power-plan controls.
+- Lock, sign out, sleep, restart, and shutdown actions; disruptive power actions require confirmation.
+- Browser and desktop automation using DOM, Windows accessibility, keyboard, and mouse tools.
+- Screen Assist captures the current screen and lets you ask a question about it.
+- Recorded automations replay with accessibility targets, keyboard navigation, visual matching, and guarded coordinate fallback.
+
+## Requirements
+
+- Windows 11.
+- Python 3.10 or later when running from source.
+- ARM64 or x64 Python matching the intended package architecture.
+- Ollama for local natural-language planning (optional for deterministic controls).
+- Dependencies from `requirements.txt`.
+
+> `pyaudiowpatch` may not provide wheels for every Windows ARM64 Python version. Voice input is optional; the notch and text interface work without it.
+
+## Quick start from source
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -14,191 +53,113 @@ python main.py --doctor
 python start_app.py
 ```
 
-Start Ollama first if it is not running. Copy `.env.example` to `.env` only if you
-do not already have a configuration. Environment variables take precedence over `.env`.
-The bundled launcher can also start a local `ollama.exe`.
-CPU-only inference can take substantial time per step. `JARVIS_MODEL_TIMEOUT`
-sets the model request timeout in seconds (default: 300). Simple direct commands
-such as opening an explicit URL bypass the planner.
+The launcher opens the Dynamic Island instead of the legacy chat window. The packaged application can be assigned to the Copilot hardware key.
 
-Describe a complete task in the widget, for example: “Open example.com and tell me
-its page title,” or “Open Notepad and enter a shopping list.” Text input works
-without the speech models. The widget runs one task at a time and shows tool
-progress. **Stop** cancels subsequent actions; an in-flight model request or native
-tool call must return before the worker exits. Moving the mouse to a screen corner
-also triggers PyAutoGUI's fail-safe.
+If Ollama is unavailable, start it first or let the bundled launcher start `ollama.exe`. Dexget loads the model only for tasks that need it and releases it after the task to reduce idle CPU and memory use.
 
-For faster natural-language routing, configure a TypeSafe/JEV API key in `.env`:
+## Search syntax
+
+Open Search in the expanded island and type a name to find local applications, files, folders, executables, or videos. Press Enter to open the first result or select a specific row.
+
+| Query | Meaning |
+| --- | --- |
+| `brave` | Search indexed applications and files |
+| `:D` | Browse or search the D drive first |
+| `:C report` | Search the C drive for `report` |
+| `:Movies` | Search a folder named Movies |
+| `Movies:D` | Search the Movies folder on D |
+| `D: Movies` | Alternative drive/folder form |
+| `ask: your question` | Ask Dexget instead of local search |
+| `web: your query` | Search the web explicitly |
+
+Application results are deduplicated so an installed application is not followed by redundant shortcuts for the same app.
+
+## Recording reliable automations
+
+1. Expand the island and open **Quick Launch**.
+2. Enter **Edit**, add an **Automation**, and start recording.
+3. Perform the task at a normal pace. Click named controls when possible and use Tab/Shift+Tab for keyboard-accessible interfaces.
+4. Stop recording only after the final visible result appears.
+5. Name and save the automation, then run it from Quick Launch.
+
+Replay waits for the target window and control rather than depending only on fixed delays. It tries accessibility metadata first, keyboard focus navigation second, visual matching third, and recorded coordinates only as a fallback. Avoid recording passwords, one-time codes, CAPTCHAs, administrator prompts, or actions depending on unpredictable content.
+
+## Phone transfer
+
+The Android companion is under `android/`. Open Phone Transfer in Dexget, keep the laptop transfer service open, and scan its QR code from the companion app. After pairing, select files from the phone or share files held in the notch shelf.
+
+Local networking, hotspot behavior, Android permissions, and firewall policy can affect discovery. Pairing is private to the displayed session; never expose the transfer service directly to the public internet.
+
+## Local model and voice configuration
+
+The default planner uses Ollama, so no paid API key is required.
 
 ```env
-TYPESAFE_API_KEY=your_key_here
-JARVIS_JEV_MODE=active
+JARVIS_LLM_PROVIDER=ollama
+JARVIS_MODEL=gemma3:4b
+JARVIS_MODEL_TIMEOUT=300
 ```
 
-JEV classifies unfamiliar phrasing before the larger planning model, reuses its
-HTTP connection, caches repeated commands for five minutes, and falls back to the
-local semantic router if it is disabled or unconfigured. Exact system commands
-continue to use the deterministic router and make no network call.
+Optional providers can be configured in `.env`; environment variables take precedence. Never commit `.env` or API keys.
 
-The planner can inspect webpages, fill fields, click controls, read results,
-select dropdown options, switch tabs, and enter iframes. Chrome is the default;
-set `JARVIS_BROWSER=edge` for Edge. Automation uses its own persistent profile
-under `%LOCALAPPDATA%\JarvisAgent`, so it can coexist with your daily browser.
-Sign in manually in that window when needed; existing daily-browser logins are
-not imported. If the agent requests sign-in or missing information, your next
-message resumes the pending task.
+Windows speech is the free text-to-speech default. Microphone input can use a local Vosk model:
 
-Windows apps are inspected through accessibility controls (`desktop_observe`,
-`desktop_click`, `desktop_type`, `desktop_focus`), with mouse/keyboard tools and
-PowerShell available for other tasks. File tools default to all paths accessible
-to your Windows account. Set `JARVIS_FS_ROOT` to semicolon-separated directories
-to restrict them. Shell and destructive file actions ask for approval inside the
-widget by default. Set `JARVIS_REQUIRE_CONFIRMATION=false` to automatically
-authorize those registered tools.
+```env
+VOICE_PROVIDER=windows
+JARVIS_VOSK_MODEL=C:\path\to\vosk-model
+```
 
-Use `JARVIS_LLM_PROVIDER=ollama` for local-only inference, `openai` for the existing
-paid API connector, or `auto` to explicitly permit cloud fallback. Windows speech
-is the free default; microphone input additionally needs a Vosk model. Set
-`JARVIS_VOSK_MODEL` to its extracted directory. The default is
-`~/.jarvis/vosk-model-small-en-us-0.15`. Faster Whisper is an optional enhancement,
-enabled with `JARVIS_WHISPER_ENABLED=true` after installing `faster-whisper`.
+Faster Whisper and cloud speech providers are optional enhancements.
 
-This is best suited to apps exposing accessibility controls and pages exposing a
-DOM. Custom-drawn interfaces, CAPTCHAs, administrator-only dialogs and site login
-restrictions can still require your intervention. Small local models can choose
-incorrect steps; tool results and failure limits do not guarantee every task.
+## Safety boundaries
+
+- Shell commands, destructive file operations, and power actions retain confirmation safeguards.
+- Set `JARVIS_FS_ROOT` to semicolon-separated directories to restrict filesystem access.
+- Do not disable confirmations unless the machine and commands are fully trusted.
+- Custom-drawn apps, CAPTCHAs, protected video, administrator dialogs, and login challenges may need manual intervention.
+- Dexget is intended for normal desktop use and must not bypass exam, kiosk, access-control, or security restrictions.
+
+## Build the Windows package
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_copilot_package.ps1
+Add-AppxPackage -Path .\dist\JarvisCopilot.msix
+```
+
+The build creates the executable, compiles the native Rust search helper, prepares assets, packages the MSIX, and signs it with the configured development certificate.
 
 ## Verification
 
 ```powershell
 python -m pytest jarvis/tests tests -q
 python scripts/smoke_browser.py
-python scripts/smoke_browser.py --live-model
 python scripts/smoke_desktop.py
 ```
 
-The browser smoke test uses a temporary local HTML form and headless Chrome,
-checks the actual saved DOM value, exercises dropdowns and tab switching, and
-closes its browser afterwards. `--live-model` lets Ollama plan and operate the form.
-Selenium may download a matching driver on first use.
-The desktop smoke test briefly opens its own disposable app, types into it,
-clicks Save, checks the saved text, and closes that app.
-
-Implementation references: [Selenium browser windows](https://www.selenium.dev/documentation/webdriver/interactions/windows/),
-[Ollama generation and JSON output](https://docs.ollama.com/api/generate), and
-[pywinauto accessibility controls](https://pywinauto.readthedocs.io/en/latest/code/pywinauto.controls.uiawrapper.html).
-
-## Current Features
-
-- **Desktop Widget**: A floating, always-on-top desktop interface.
-- **Voice Pipeline**: Continuous speech-to-text (Vosk) and text-to-speech (Fish Audio / Windows native fallback).
-- **Agentic Execution**: Capable of creating plans, executing actions, observing results, and verifying success.
-- **Desktop Automation**: Performs filesystem operations, browser navigation, and application launching.
-- **Hardware Integration**: Can be packaged as a Windows MSIX app and launched directly via the Copilot hardware key.
-- **File Management**: Opens, searches, creates, lists, copies, moves, and deletes files or folders using natural-language commands. Copy/move and delete operations retain the widget's confirmation safeguards.
-- **Windows Controls**: Opens specific Settings pages; reports specifications, battery, display, and storage; controls volume and laptop brightness; locks, signs out, sleeps, restarts, or shuts down; and switches between balanced, performance, and power-saver plans.
+Use `python scripts/smoke_browser.py --live-model` to include live Ollama planning.
 
 ## Architecture
 
-1. **Widget (`start_app.py` / `widget.py`)**: The PyQt6-based user interface.
-2. **JARVIS Core (`jarvis/`)**: The core application logic.
-3. **Agentic Layer (`jarvis/agent/`)**: The Tool Registry, Planner, Executor, Observer, and Verifier for robust task execution.
-4. **Tools / Services (`jarvis/tools/`)**: The specific capabilities the agent can invoke (filesystem, Windows UI, web extract, terminal).
-
-## Requirements
-
-- **Windows 11** (or Windows 10 with Copilot key support if using hardware key mapping).
-- **Python 3.10+**.
-- **Dependencies**: Listed in `requirements.txt`. Requires PyQt6, PyAudioWpatch, Vosk, and other core libraries.
-
-## Installation
-
-1. Clone this repository.
-2. Ensure you have Python installed.
-3. Install dependencies:
-   ```cmd
-   pip install -r requirements.txt
-   ```
-4. Set up the environment variables (see below).
-
-## Environment Variables
-
-Copy `.env.example` to `.env` and fill in the necessary keys.
-
-- `FISH_API_KEY`: API key for Fish Audio TTS.
-- `FISH_VOICE_ID`: Custom voice ID for Fish Audio.
-- `VOICE_PROVIDER`: Set to `fish` for cloud TTS or `windows` for local fallback.
-- `VOICE_MODE`: Set to `CONTINUOUS` or `WAKE_WORD`.
-- `WAKE_WORD`: The wake word to activate JARVIS (e.g., `jarvis`).
-- `MIC_DEVICE_INDEX` / `SPEAKER_DEVICE_INDEX`: Leave blank to auto-detect default audio devices.
-
-*Note: The `.env` file should never be committed to Git.*
-
-## Voice Setup
-
-- **STT (Speech-to-Text)**: Powered locally by Vosk. It requires a Vosk model (see Model Setup).
-- **TTS (Text-to-Speech)**: Uses native Windows speech by default. Fish Audio is optional.
-
-## Model Setup
-
-- **Vosk STT Model**: You need to download a Vosk English model (e.g., `vosk-model-en-us-0.22`) and extract it. 
-  *(Note: Model binaries should be kept locally and not committed to Git).*
-- **Ollama**: JARVIS can utilize a local Ollama server for local LLM inference. If Ollama is not installed globally, `launcher.py` or the app can attempt to configure it locally.
-
-## Running JARVIS
-
-To run the JARVIS desktop widget from source:
-```cmd
-python start_app.py
-```
-
-To run JARVIS in CLI mode (without the GUI):
-```cmd
-python main.py
-```
-
-## Project Structure
-
 ```text
-JARVIS/
-│
-├── jarvis/
-│   ├── agent/       # Agentic reasoning, execution, planning
-│   ├── config/      # Configuration
-│   ├── memory/      # RAG, document intelligence
-│   ├── perception/  # Input parsing
-│   ├── security/    # Command confirmation, permissions
-│   ├── tools/       # Filesystem, OS, Web, and Browser tools
-│   ├── utils/       # Helpers
-│   └── voice/       # STT/TTS pipeline
-│
-├── assets/          # Icons and UI assets
-├── config/          # (if any external configuration)
-├── tests/           # Unit tests
-├── archive/         # Archived scratch/test files
-├── .env.example
-├── .gitignore
-├── README.md
-├── requirements.txt
-└── start_app.py     # Main GUI entry point
+widget.py                    PyQt6 Dynamic Island and dashboard
+notch_settings.py            Separate customization application
+jarvis/                      Agent, tools, configuration, voice, and services
+rust/crates/dexget-search/   Native low-latency search helper
+android/                     Dexget Android companion
+scripts/                     Smoke tests and maintenance utilities
+tests/ and jarvis/tests/     Automated test suites
+build_copilot_package.ps1    Windows MSIX build and signing pipeline
 ```
 
 ## Development
 
-To modify the code, run it from source via `python start_app.py`.
-If you modify the UI or backend and want to update the Copilot hardware key version, you must rebuild the MSIX package.
+Run `python start_app.py` while modifying the project. Before packaging a change:
 
-To package the app for the Copilot key:
-1. Run the `build_copilot_package.ps1` PowerShell script.
-2. Install the resulting `.msix` file.
+1. Run the relevant tests.
+2. Build the MSIX.
+3. Install and test the package because packaged paths and permissions differ from source runs.
+4. Keep generated output, certificates, secrets, and local model files out of Git.
 
-## Security
+## License
 
-**Never commit API keys or private certificates to version control.** 
-Always use `.env` for secrets. Any generated development certificates (`*.pfx`) for MSIX packaging are ignored by Git.
-
-## Roadmap
-
-- Extended memory and context persistence across sessions.
-- Broader support for custom-drawn interfaces and complex web applications.
-- Deeper Windows settings integration.
+No license has been declared yet. Add a license file before distributing or accepting third-party contributions.
