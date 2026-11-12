@@ -1896,27 +1896,8 @@ class JarvisWidget(QWidget):
         # pages, and no nested legacy cards or duplicated title bar.
         self.dashboard_widget = QFrame()
         self.dashboard_widget.setObjectName("Dashboard")
-        self.dashboard_widget.setStyleSheet("""
-            QFrame#Dashboard { background: transparent; }
-            QLabel { color: #f5f5f7; }
-            QPushButton { color: #d7d7dc; background: transparent; border: none;
-                          border-radius: 12px; padding: 7px 12px; font-size: 12px; }
-            QPushButton:hover { background: #202124; color: white; }
-            QPushButton:checked { background: #2b2c30; color: white; }
-            QLineEdit { color: white; background: #151517; border: none;
-                        border-radius: 11px; padding: 10px 14px; font-size: 13px; }
-            QComboBox, QDateTimeEdit { color:#e8e8eb; background:#17181c;
-                        border:1px solid #292a30; border-radius:9px;
-                        padding:5px 9px; font-size:11px; }
-            QComboBox::drop-down, QDateTimeEdit::drop-down { border:none; width:18px; }
-            QComboBox QAbstractItemView { color:white; background:#17181c;
-                        selection-background-color:#2b2c30; border:1px solid #303139; }
-            QSlider::groove:horizontal { height: 7px; background: #36373b;
-                                         border-radius: 3px; }
-            QSlider::sub-page:horizontal { background: #ffcf00; border-radius: 3px; }
-            QSlider::handle:horizontal { background: white; width: 18px;
-                                         margin: -6px 0; border-radius: 9px; }
-        """)
+        # The complete dashboard palette is applied together with the outer
+        # island so nested panels do not retain a conflicting fixed theme.
         dashboard_layout = QVBoxLayout(self.dashboard_widget)
         dashboard_layout.setContentsMargins(8, 0, 8, 0)
         dashboard_layout.setSpacing(8)
@@ -2046,7 +2027,8 @@ class JarvisWidget(QWidget):
         home_grid.setColumnStretch(1, 1)
 
         launcher = QFrame()
-        launcher.setStyleSheet("QFrame { background:#111114; border-radius:14px; }")
+        launcher.setObjectName("LauncherCard")
+        self.dashboard_launcher_card = launcher
         launcher_layout = QVBoxLayout(launcher)
         launcher_layout.setContentsMargins(14, 10, 14, 10)
         launcher_layout.setSpacing(7)
@@ -2062,6 +2044,7 @@ class JarvisWidget(QWidget):
         launcher_header.addWidget(self.dashboard_launcher_edit)
         launcher_layout.addLayout(launcher_header)
         self.dashboard_launcher_rows = {}
+        self.dashboard_launcher_headings = []
         for kind, title, add_handler in (
                 ("application", "Applications", self._add_dashboard_application),
                 ("script", "Scripts", self._add_dashboard_script),
@@ -2070,8 +2053,9 @@ class JarvisWidget(QWidget):
             row = QHBoxLayout()
             row.setSpacing(6)
             heading = QLabel(title)
+            heading.setObjectName("SectionLabel")
             heading.setFixedWidth(82)
-            heading.setStyleSheet("color:#9a9ba2; font-size:11px;")
+            self.dashboard_launcher_headings.append(heading)
             row.addWidget(heading)
             row.addStretch(1)
             add_button = QPushButton("＋")
@@ -2599,22 +2583,87 @@ class JarvisWidget(QWidget):
         return QRect(round(center_x - width / 2.0), y, width, height)
 
     def _apply_default_container_style(self):
-        theme = self._pref("appearance/theme", "Midnight")
-        backgrounds = {
-            "Black": "rgba(0, 0, 0, 252)",
-            "Graphite": "rgba(24, 26, 31, 248)",
-            "Glass": "rgba(18, 22, 29, 224)",
-            "Midnight": "rgba(12, 14, 18, 244)",
-        }
-        background = backgrounds.get(theme, backgrounds["Midnight"])
+        palette = self._theme_palette()
         radius = self._pref("appearance/corner_radius", 24)
         self.container.setStyleSheet(f"""
             #Container {{
-                background-color: {background};
+                background-color: {palette['outer']};
                 border-radius: {radius}px;
-                border: 1px solid rgba(255, 255, 255, 48);
+                border: 1px solid {palette['border']};
             }}
         """)
+        self._apply_dashboard_theme(palette)
+
+    def _theme_palette(self):
+        palettes = {
+            "Black": {
+                "outer": "rgba(0, 0, 0, 252)", "panel": "#050505",
+                "surface": "#0d0d0e", "surface_hover": "#1a1a1c",
+                "text": "#ffffff", "muted": "#9a9aa1",
+                "border": "rgba(255, 255, 255, 36)", "track": "#29292d"},
+            "Graphite": {
+                "outer": "rgba(28, 30, 35, 250)", "panel": "#202228",
+                "surface": "#2a2d34", "surface_hover": "#363a43",
+                "text": "#f6f7f9", "muted": "#aeb4bf",
+                "border": "rgba(255, 255, 255, 54)", "track": "#4a4f59"},
+            "Glass": {
+                "outer": "rgba(18, 25, 36, 222)", "panel": "rgba(20, 28, 40, 205)",
+                "surface": "rgba(44, 55, 72, 190)",
+                "surface_hover": "rgba(67, 82, 104, 215)",
+                "text": "#f8fbff", "muted": "#b2bdcc",
+                "border": "rgba(190, 218, 255, 76)", "track": "#445064"},
+            "Midnight": {
+                "outer": "rgba(12, 14, 18, 246)", "panel": "#0d1016",
+                "surface": "#171b23", "surface_hover": "#232a35",
+                "text": "#f5f7fb", "muted": "#9da7b5",
+                "border": "rgba(255, 255, 255, 46)", "track": "#343b47"},
+        }
+        palette = dict(palettes.get(
+            self._pref("appearance/theme", "Midnight"), palettes["Midnight"]))
+        palette["accent"] = {
+            "Sky": "#62d8ff", "Green": "#39e58c", "Orange": "#ff9f0a",
+            "Purple": "#bf8cff", "White": "#f5f7fb",
+        }.get(self._pref("appearance/accent", "Sky"), "#62d8ff")
+        return palette
+
+    def _apply_dashboard_theme(self, palette=None):
+        if not hasattr(self, "dashboard_widget"):
+            return
+        p = palette or self._theme_palette()
+        self.dashboard_widget.setStyleSheet(f"""
+            QFrame#Dashboard {{ background: transparent; }}
+            QFrame#LauncherCard, QFrame#DashboardPage {{
+                background: {p['panel']}; border: 1px solid {p['border']};
+                border-radius: 14px;
+            }}
+            QLabel {{ color: {p['text']}; background: transparent; }}
+            QLabel#SectionLabel {{ color: {p['muted']}; font-size: 11px; }}
+            QPushButton {{ color: {p['text']}; background: transparent; border: none;
+                          border-radius: 12px; padding: 7px 12px; font-size: 12px; }}
+            QPushButton:hover {{ background: {p['surface_hover']}; }}
+            QPushButton:checked {{ background: {p['surface']}; color: {p['accent']}; }}
+            QLineEdit {{ color: {p['text']}; background: {p['surface']};
+                        border: 1px solid {p['border']}; border-radius: 11px;
+                        padding: 10px 14px; font-size: 13px; }}
+            QComboBox, QDateTimeEdit {{ color: {p['text']}; background: {p['surface']};
+                        border: 1px solid {p['border']}; border-radius: 9px;
+                        padding: 5px 9px; font-size: 11px; }}
+            QComboBox::drop-down, QDateTimeEdit::drop-down {{ border:none; width:18px; }}
+            QComboBox QAbstractItemView {{ color: {p['text']}; background: {p['panel']};
+                        selection-background-color: {p['surface_hover']};
+                        border: 1px solid {p['border']}; }}
+            QSlider::groove:horizontal {{ height:7px; background:{p['track']}; border-radius:3px; }}
+            QSlider::sub-page:horizontal {{ background:{p['accent']}; border-radius:3px; }}
+            QSlider::handle:horizontal {{ background:{p['text']}; width:18px;
+                                         margin:-6px 0; border-radius:9px; }}
+        """)
+        for button in getattr(self, "dashboard_launcher_buttons", []):
+            button.setStyleSheet(
+                f"QPushButton {{ color:{p['text']}; background:{p['surface']}; "
+                f"border:1px solid {p['border']}; border-radius:10px; "
+                "padding:5px 10px; font-size:12px; text-align:left; } "
+                f"QPushButton:hover {{ background:{p['surface_hover']}; "
+                f"border-color:{p['accent']}; }}")
 
     def _apply_container_style_for_size(self, size):
         if size in (self.COLLAPSED_SIZE, self.FILE_SHELF_SIZE):
@@ -3329,16 +3378,12 @@ class JarvisWidget(QWidget):
         button.setProperty("launcherCustom", bool(custom))
         button.setProperty("launcherEntry", json.dumps(entry, ensure_ascii=False))
         button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setStyleSheet(
-            "QPushButton { background:#1b1b1f; border:1px solid #303037; "
-            "border-radius:10px; padding:5px 10px; font-size:12px; "
-            "text-align:left; } "
-            "QPushButton:hover { background:#27272d; border-color:#4a4a54; }")
         button.clicked.connect(
             lambda checked=False, item=button: self._activate_dashboard_launcher(item))
         # Keep custom actions before the flexible spacer and the add button.
         row.insertWidget(max(1, row.count() - 2), button)
         self.dashboard_launcher_buttons.append(button)
+        self._apply_dashboard_theme()
         return button
 
     def _dashboard_launcher_icon(self, entry):
