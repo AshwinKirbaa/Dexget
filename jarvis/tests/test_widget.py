@@ -12,7 +12,8 @@ from PyQt6.QtGui import QPixmap
 from jarvis.agent.agent import Agent
 from jarvis.agent.tool_registry import ToolRegistry
 from jarvis.tools.base import RiskLevel, Tool, ToolResult
-from widget import JarvisWidget, JarvisWorker, MediaSessionWorker, LocalSearchWorker
+from widget import (JarvisWidget, JarvisWorker, MediaSessionWorker,
+                    LocalSearchWorker, MacroPlaybackWorker)
 
 
 def test_media_worker_prefers_playing_session_over_stale_current_session():
@@ -939,6 +940,76 @@ def test_dashboard_launcher_dispatches_without_agent_or_model():
         widget.media_worker.wait(2000)
         widget.close()
         app.processEvents()
+
+
+def test_recorded_automation_semantically_matches_moved_enabled_control():
+    class Control:
+        def __init__(self, name="", automation_id="", control_type="WindowControl",
+                     class_name="", children=None, enabled=True, offscreen=False):
+            self.Name = name
+            self.AutomationId = automation_id
+            self.ControlTypeName = control_type
+            self.ClassName = class_name
+            self.IsEnabled = enabled
+            self.IsOffscreen = offscreen
+            self._children = list(children or [])
+
+        def GetChildren(self):
+            return self._children
+
+    moved_button = Control(
+        "Join Voice", "join-call", "ButtonControl", "Button", enabled=True)
+    wrong_button = Control(
+        "Join Voice", "other-action", "ButtonControl", "Button", enabled=True)
+    root = Control("Discord", children=[wrong_button, moved_button])
+
+    class Desktop:
+        @staticmethod
+        def GetChildren():
+            return [root]
+
+    class Auto:
+        @staticmethod
+        def GetRootControl():
+            return Desktop()
+
+    worker = MacroPlaybackWorker([])
+    target = {
+        "name": "Join Voice", "automation_id": "join-call",
+        "control_type": "ButtonControl", "class_name": "Button",
+        "window": "Discord",
+    }
+    assert worker._find_target(Auto(), target, timeout=0.1) is moved_button
+    moved_button.IsEnabled = False
+    assert worker._find_target(Auto(), target, timeout=0.05) is None
+
+
+def test_recorded_automation_rejects_weak_type_only_matches():
+    class Control:
+        Name = ""
+        AutomationId = ""
+        ControlTypeName = "ButtonControl"
+        ClassName = "Button"
+        IsEnabled = True
+        IsOffscreen = False
+
+        @staticmethod
+        def GetChildren():
+            return []
+
+    class Desktop:
+        @staticmethod
+        def GetChildren():
+            return [Control()]
+
+    class Auto:
+        @staticmethod
+        def GetRootControl():
+            return Desktop()
+
+    worker = MacroPlaybackWorker([])
+    target = {"control_type": "ButtonControl", "class_name": "Button"}
+    assert worker._find_target(Auto(), target, timeout=0.05) is None
 
 
 def test_timer_activity_counts_down_and_restores_default_surface():

@@ -27,7 +27,7 @@ from jarvis.file_transfer import TransferServer, current_wifi_credentials, pairi
 
 
 class MacroPlaybackWorker(QThread):
-    """Replay a recorded mouse/keyboard sequence without starting the model."""
+    """Replay a recording, resolving UI controls again at run time."""
     playback_finished = pyqtSignal(bool, str)
 
     def __init__(self, actions):
@@ -38,32 +38,153 @@ class MacroPlaybackWorker(QThread):
     def cancel(self):
         self._cancelled.set()
 
+    @staticmethod
+    def _control_value(control, name):
+        try:
+            value = getattr(control, name, "")
+            return str(value or "")
+        except Exception:
+            return ""
+
+    @classmethod
+    def _target_score(cls, control, target):
+        """Score a live UIA control against a recorded semantic identity."""
+        score = 0
+        automation_id = cls._control_value(control, "AutomationId")
+        name = cls._control_value(control, "Name")
+        control_type = cls._control_value(control, "ControlTypeName")
+        class_name = cls._control_value(control, "ClassName")
+        if target.get("automation_id"):
+            if automation_id != target["automation_id"]:
+                return -1
+            score += 120
+        if target.get("name"):
+            if not target.get("automation_id") and name != target["name"]:
+                return -1
+            if name == target["name"]:
+                score += 80
+        if target.get("control_type") and control_type == target["control_type"]:
+            score += 24
+        if target.get("class_name") and class_name == target["class_name"]:
+            score += 16
+        return score
+
+    def _find_target(self, auto, target, timeout=15.0):
+        """Wait for the recorded control to exist, become visible and enabled."""
+        deadline = time.monotonic() + max(1.0, float(timeout))
+        while not self._cancelled.is_set() and time.monotonic() < deadline:
+            best = None
+            best_score = 0
+            try:
+                roots = list(auto.GetRootControl().GetChildren())
+            except Exception:
+                roots = []
+            preferred_window = str(target.get("window", "")).casefold()
+            if preferred_window:
+                roots.sort(key=lambda item: preferred_window not in
+                           self._control_value(item, "Name").casefold())
+            pending = [(
+                root,
+                bool(preferred_window and preferred_window in
+                     self._control_value(root, "Name").casefold()),
+            ) for root in roots]
+            visited = 0
+            while pending and visited < 4000:
+                control, window_match = pending.pop(0)
+                visited += 1
+                score = self._target_score(control, target)
+                if window_match:
+                    score += 50
+                if score > best_score:
+                    try:
+                        available = bool(control.IsEnabled) and not bool(control.IsOffscreen)
+                    except Exception:
+                        available = False
+                    if available:
+                        best, best_score = control, score
+                try:
+                    pending.extend((child, window_match)
+                                   for child in control.GetChildren())
+                except Exception:
+                    pass
+            # A matching name or automation id plus the control type is strong
+            # enough; never click a weak type-only match.
+            if best is not None and best_score >= 80:
+                return best
+            self._cancelled.wait(0.2)
+        return None
+
+    def _smart_click(self, auto, action):
+        target = action.get("target")
+        if not isinstance(target, dict):
+            return False
+        control = self._find_target(auto, target, action.get("timeout", 15.0))
+        if control is None:
+            identity = target.get("name") or target.get("automation_id") or "control"
+            raise RuntimeError(f'Could not find an available "{identity}" button')
+        control.SetFocus()
+        try:
+            pattern = control.GetInvokePattern()
+            if pattern:
+                pattern.Invoke()
+                return True
+        except Exception:
+            pass
+        control.Click(simulateMove=False)
+        return True
+
     def run(self):
         try:
             import pyautogui
             pyautogui.FAILSAFE = True
-            for action in self.actions:
-                if self._cancelled.is_set():
-                    self.playback_finished.emit(False, "Automation cancelled")
-                    return
-                delay = max(0.0, min(float(action.get("delay", 0.0)), 60.0))
-                if self._cancelled.wait(delay):
-                    self.playback_finished.emit(False, "Automation cancelled")
-                    return
-                kind = action.get("type")
-                if kind == "mouse_down":
-                    pyautogui.mouseDown(
-                        int(action["x"]), int(action["y"]), button=action["button"])
-                elif kind == "mouse_up":
-                    pyautogui.mouseUp(
-                        int(action["x"]), int(action["y"]), button=action["button"])
-                elif kind == "scroll":
-                    pyautogui.moveTo(int(action["x"]), int(action["y"]))
-                    pyautogui.scroll(int(action["dy"]))
-                elif kind == "key_down":
-                    pyautogui.keyDown(action["key"])
-                elif kind == "key_up":
-                    pyautogui.keyUp(action["key"])
+            try:
+                import uiautomation as auto
+                initializer = auto.UIAutomationInitializerInThread()
+                initializer.__enter__()
+            except Exception:
+                auto = None
+                initializer = None
+            try:
+                skip_mouse_up = set()
+                for action in self.actions:
+                    if self._cancelled.is_set():
+                        self.playback_finished.emit(False, "Automation cancelled")
+                        return
+                    kind = action.get("type")
+                    semantic = kind == "mouse_down" and isinstance(
+                        action.get("target"), dict)
+                    recorded_delay = max(
+                        0.0, min(float(action.get("delay", 0.0)), 60.0))
+                    # Target discovery replaces fragile recorded loading delays.
+                    delay = min(recorded_delay, 0.35) if semantic else recorded_delay
+                    if self._cancelled.wait(delay):
+                        self.playback_finished.emit(False, "Automation cancelled")
+                        return
+                    button = str(action.get("button", "left"))
+                    if kind == "mouse_down" and semantic and auto is not None:
+                        self._smart_click(auto, action)
+                        skip_mouse_up.add(button)
+                    elif kind == "mouse_down":
+                        pyautogui.mouseDown(
+                            int(action["x"]), int(action["y"]), button=button)
+                    elif kind == "mouse_up" and button in skip_mouse_up:
+                        skip_mouse_up.discard(button)
+                    elif kind == "mouse_up":
+                        pyautogui.mouseUp(
+                            int(action["x"]), int(action["y"]), button=button)
+                    elif kind == "scroll":
+                        pyautogui.moveTo(int(action["x"]), int(action["y"]))
+                        pyautogui.scroll(int(action["dy"]))
+                    elif kind == "key_down":
+                        pyautogui.keyDown(action["key"])
+                    elif kind == "key_up":
+                        pyautogui.keyUp(action["key"])
+            finally:
+                if initializer is not None:
+                    try:
+                        initializer.__exit__(None, None, None)
+                    except Exception:
+                        pass
             self.playback_finished.emit(True, "Automation completed")
         except Exception as exc:
             self.playback_finished.emit(False, f"Automation stopped: {exc}")
@@ -3533,6 +3654,35 @@ class JarvisWidget(QWidget):
         self._macro_last_event = now
         self._macro_actions.append(action)
 
+    @staticmethod
+    def _capture_macro_target(x, y):
+        """Capture a stable semantic identity for the control under the cursor."""
+        try:
+            import uiautomation as auto
+            with auto.UIAutomationInitializerInThread():
+                control = auto.ControlFromPoint(int(x), int(y))
+                if not control:
+                    return None
+                target = {
+                    "name": str(control.Name or ""),
+                    "automation_id": str(control.AutomationId or ""),
+                    "control_type": str(control.ControlTypeName or ""),
+                    "class_name": str(control.ClassName or ""),
+                }
+                parent = control
+                for _ in range(10):
+                    if not parent:
+                        break
+                    if str(parent.ControlTypeName or "") == "WindowControl":
+                        target["window"] = str(parent.Name or "")
+                        break
+                    parent = parent.GetParentControl()
+                if not target["name"] and not target["automation_id"]:
+                    return None
+                return target
+        except Exception:
+            return None
+
     def _start_macro_recording(self):
         if self._macro_recording or not self._macro_label:
             return
@@ -3546,11 +3696,17 @@ class JarvisWidget(QWidget):
         self._macro_last_event = time.monotonic()
 
         def on_click(x, y, button, pressed):
-            self._record_macro_action({
+            action = {
                 "type": "mouse_down" if pressed else "mouse_up",
                 "x": int(x), "y": int(y),
                 "button": getattr(button, "name", "left"),
-            })
+            }
+            if pressed:
+                target = self._capture_macro_target(x, y)
+                if target:
+                    action["target"] = target
+                    action["timeout"] = 15.0
+            self._record_macro_action(action)
 
         def on_scroll(x, y, dx, dy):
             self._record_macro_action({
@@ -3599,7 +3755,7 @@ class JarvisWidget(QWidget):
             return
         entry = {
             "kind": "automation", "label": label,
-            "payload": json.dumps({"version": 1, "actions": actions}, separators=(",", ":")),
+            "payload": json.dumps({"version": 2, "actions": actions}, separators=(",", ":")),
         }
         self.dashboard_custom_launchers.append(entry)
         self._add_launcher_button(entry, custom=True)
