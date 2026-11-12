@@ -1208,7 +1208,7 @@ class JarvisWidget(QWidget):
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)
     HEADSET_SIZE = QSize(350, 56)
-    NOTIFICATION_SIZE = QSize(370, 64)
+    NOTIFICATION_SIZE = QSize(420, 88)
     CALL_SIZE = QSize(360, 52)
     TIMER_SIZE = QSize(270, 58)
     MEDIA_MIN_WIDTH = 400
@@ -1469,28 +1469,42 @@ class JarvisWidget(QWidget):
         self.low_power_percent.hide()
         self.low_power_battery.hide()
 
-        self.notification_icon = QLabel("✉")
-        self.notification_icon.setFixedSize(26, 26)
+        self.notification_icon = QLabel("N")
+        self.notification_icon.setFixedSize(42, 42)
         self.notification_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.notification_icon.setFont(QFont("Segoe UI Symbol", 13, QFont.Weight.DemiBold))
+        self.notification_icon.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
         self.notification_icon.setStyleSheet(
-            "background: transparent; color: #aeb5bf;")
+            "background: #6677a8; color: white; border-radius: 12px;")
+        self.notification_badge = QLabel("●", self.notification_icon)
+        self.notification_badge.setGeometry(28, 27, 14, 14)
+        self.notification_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.notification_badge.setStyleSheet(
+            "color: #30d158; background: #0b0d11; border-radius: 7px;")
         self.notification_identity = QWidget()
         notification_layout = QVBoxLayout(self.notification_identity)
-        notification_layout.setContentsMargins(0, 5, 0, 5)
-        notification_layout.setSpacing(0)
+        notification_layout.setContentsMargins(0, 4, 0, 4)
+        notification_layout.setSpacing(1)
         self.notification_title = QLabel("Notification")
         self.notification_title.setMaximumWidth(290)
-        self.notification_title.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        self.notification_title.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
         self.notification_title.setStyleSheet("color: white;")
         self.notification_body = QLabel("")
         self.notification_body.setMaximumWidth(290)
+        self.notification_body.setMaximumHeight(48)
+        self.notification_body.setWordWrap(True)
         self.notification_body.setFont(QFont("Segoe UI", 9))
         self.notification_body.setStyleSheet("color: #aeb5bf;")
         notification_layout.addWidget(self.notification_title)
         notification_layout.addWidget(self.notification_body)
+        self.notification_time = QLabel("")
+        self.notification_time.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        self.notification_time.setFont(QFont("Segoe UI", 8))
+        self.notification_time.setStyleSheet("color: #8d95a1;")
+        self.notification_time.setFixedWidth(58)
         self.notification_icon.hide()
         self.notification_identity.hide()
+        self.notification_time.hide()
 
         self.earbuds_indicator = EarbudsIndicator()
         self.headset_identity = QWidget()
@@ -1637,11 +1651,12 @@ class JarvisWidget(QWidget):
         title_layout.addWidget(self.timer_status_widget, 1)
         title_layout.addWidget(self.charging_label)
         title_layout.addWidget(self.low_power_label)
-        title_layout.addWidget(self.notification_identity)
+        title_layout.addWidget(self.notification_icon)
+        title_layout.addWidget(self.notification_identity, 1)
+        title_layout.addWidget(self.notification_time)
         title_layout.addWidget(self.earbuds_indicator)
         title_layout.addWidget(self.headset_identity)
         title_layout.addStretch()
-        title_layout.addWidget(self.notification_icon)
         title_layout.addWidget(self.charging_percent)
         title_layout.addWidget(self.battery_indicator)
         title_layout.addWidget(self.low_power_percent)
@@ -5120,16 +5135,49 @@ class JarvisWidget(QWidget):
         self.close_btn.hide()
         self.screen_assist_btn.hide()
         app_name = (app_name or "Windows").strip()
-        self.notification_icon.setText("✉")
-        self.notification_title.setText((title or "New notification")[:52])
-        message = body if body and body != app_name else app_name
-        self.notification_body.setText(f'“{message[:62]}”  · now')
+        words = [part for part in app_name.replace("-", " ").split() if part]
+        initials = "".join(part[0] for part in words[:2]).upper() or "N"
+        palette = ("#5267a5", "#446f77", "#76578c", "#8a5b4b", "#4f6f55")
+        color = palette[int(hashlib.sha1(app_name.encode("utf-8")).hexdigest()[:2], 16)
+                        % len(palette)]
+        self.notification_icon.setText(initials)
+        self.notification_icon.setStyleSheet(
+            f"background: {color}; color: white; border-radius: 12px;")
+        self.notification_title.setText(app_name[:42])
+        headline = (title or "New notification").strip()
+        detail = (body or "").strip()
+        message = headline
+        if detail and detail.casefold() not in (headline.casefold(), app_name.casefold()):
+            message = f"{headline}\n{detail}"
+        self.notification_body.setText(message[:150])
+        from datetime import datetime
+        self.notification_time.setText(
+            datetime.now().strftime("%I:%M %p").lstrip("0"))
         self._apply_notification_container_style()
         self.title_bar.setFixedHeight(self.NOTIFICATION_SIZE.height())
         self.notification_icon.show()
         self.notification_identity.show()
+        self.notification_time.show()
         self._present_compact(self.NOTIFICATION_SIZE)
+        self._play_notification_sound()
         self._notification_hide_timer.start(5200)
+
+    @staticmethod
+    def _play_notification_sound():
+        """Play the configured Windows notification cue without blocking UI."""
+        if sys.platform != "win32":
+            return
+        try:
+            import winsound
+            winsound.PlaySound(
+                "SystemNotification",
+                winsound.SND_ALIAS | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        except Exception:
+            try:
+                import winsound
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            except Exception:
+                pass
 
     def finish_notification_activity(self, restore=True):
         if not self._notification_active:
@@ -5137,6 +5185,7 @@ class JarvisWidget(QWidget):
         self._notification_active = False
         self.notification_icon.hide()
         self.notification_identity.hide()
+        self.notification_time.hide()
         self._apply_default_container_style()
         self.title_bar.setFixedHeight(48)
         self.status_dot.show()
@@ -5172,6 +5221,7 @@ class JarvisWidget(QWidget):
                        self.battery_indicator, self.low_power_label,
                        self.low_power_percent, self.low_power_battery,
                        self.notification_icon, self.notification_identity,
+                       self.notification_time,
                        self.earbuds_indicator, self.headset_identity,
                        self.connection_ring, self.timer_status_widget):
             widget.hide()
@@ -5186,6 +5236,7 @@ class JarvisWidget(QWidget):
         if self._notification_active:
             self.notification_icon.show()
             self.notification_identity.show()
+            self.notification_time.show()
         elif self._headset_active:
             self.earbuds_indicator.show()
             self.headset_identity.show()

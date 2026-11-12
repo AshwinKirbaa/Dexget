@@ -600,21 +600,27 @@ def test_notification_live_activity_shows_content_and_restores_state():
         build.side_effect = lambda **kwargs: Agent(ToolRegistry(confirm_fn=kwargs["confirm_fn"]))
         widget = JarvisWidget()
     try:
-        widget.show_notification_activity("WhatsApp", "New message", "Ashwin: Hello")
+        with patch.object(widget, "_play_notification_sound") as sound:
+            widget.show_notification_activity(
+                "WhatsApp", "New message", "Ashwin: Hello")
+            sound.assert_called_once_with()
         assert widget._notification_active
         assert widget._compact_size() == widget.NOTIFICATION_SIZE
-        assert widget.notification_icon.text() == "✉"
-        assert widget.notification_title.text() == "New message"
-        assert widget.notification_body.text() == "“Ashwin: Hello”  · now"
+        assert widget.notification_icon.text() == "W"
+        assert widget.notification_title.text() == "WhatsApp"
+        assert widget.notification_body.text() == "New message\nAshwin: Hello"
+        assert widget.notification_time.text()
         assert widget.title_bar.height() == widget.NOTIFICATION_SIZE.height()
         assert "rgba(12, 14, 18, 244)" in widget.container.styleSheet()
         assert "color: white" in widget.notification_title.styleSheet()
         assert not widget.notification_identity.isHidden()
+        assert not widget.notification_time.isHidden()
         assert widget.identity_widget.isHidden()
 
         widget.finish_notification_activity()
         assert not widget._notification_active
         assert widget.notification_identity.isHidden()
+        assert widget.notification_time.isHidden()
         assert not widget.identity_widget.isHidden()
         assert widget.title_bar.height() == 48
         assert widget.worker.isRunning()
