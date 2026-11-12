@@ -6,6 +6,9 @@ def main():
     try:
         from jarvis.config.environment import load_environment
         load_environment()
+        if "--settings" in sys.argv:
+            from notch_settings import run_settings_app
+            raise SystemExit(run_settings_app())
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtNetwork import QLocalSocket, QLocalServer
         

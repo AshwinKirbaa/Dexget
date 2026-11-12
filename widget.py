@@ -1227,6 +1227,10 @@ class JarvisWidget(QWidget):
 
     def __init__(self):
         super().__init__()
+        self._preferences_store = QSettings("Dexget", "DynamicIsland")
+        self._preference_revision = None
+        self._notch_preferences = {}
+        self._read_notch_preferences()
         self._macro_recording = False
         self._macro_actions = []
         self._macro_label = ""
@@ -1340,10 +1344,14 @@ class JarvisWidget(QWidget):
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(1000)
         self._status_timer.timeout.connect(self._update_default_status)
+        self._preferences_timer = QTimer(self)
+        self._preferences_timer.setInterval(750)
+        self._preferences_timer.timeout.connect(self._reload_notch_preferences)
         self._countdown_timer = QTimer(self)
         self._countdown_timer.setInterval(200)
         self._countdown_timer.timeout.connect(self._tick_countdown)
         self.initUI()
+        self._apply_notch_preferences()
         self.local_search_worker = LocalSearchWorker()
         self.local_search_worker.results_ready.connect(
             self._show_local_search_results)
@@ -1355,6 +1363,7 @@ class JarvisWidget(QWidget):
         self._update_default_status()
         self._sync_compact_surface()
         self._status_timer.start()
+        self._preferences_timer.start()
         # Copilot/startup presents only the compact island. The conversation
         # panel opens later when the user clicks the island.
         self.scroll_area.hide()
@@ -1380,13 +1389,114 @@ class JarvisWidget(QWidget):
             self.add_message("Jarvis", "Unavailable capabilities: " +
                              "; ".join(f"{name}: {error}" for name, error in self.agent.registry.unavailable.items()))
         QTimer.singleShot(0, self._place_top_center)
-        QTimer.singleShot(3500, self.collapse_island)
+        if self._pref("behavior/start_collapsed", True):
+            QTimer.singleShot(3500, self.collapse_island)
         QTimer.singleShot(5000, self._start_notification_listener)
+
+    def _pref(self, key, default=None):
+        return self._notch_preferences.get(key, default)
+
+    @staticmethod
+    def _as_bool(value):
+        return str(value).strip().lower() not in ("false", "0", "no", "off", "")
+
+    def _read_notch_preferences(self):
+        from notch_settings import DEFAULTS
+        values = {}
+        for key, default in DEFAULTS.items():
+            value = self._preferences_store.value(f"preferences/{key}", default)
+            if isinstance(default, bool):
+                value = self._as_bool(value)
+            elif isinstance(default, int):
+                try:
+                    value = int(value)
+                except (TypeError, ValueError):
+                    value = default
+            values[key] = value
+        self._notch_preferences = values
+        self.COLLAPSED_SIZE = QSize(
+            values["appearance/compact_width"],
+            values["appearance/compact_height"])
+        self.TOP_MARGIN = values["appearance/top_offset"]
+        self.COMPACT_TRANSITION_MS = values["appearance/animation_ms"]
+        self.PANEL_TRANSITION_MS = max(0, int(self.COMPACT_TRANSITION_MS * 1.18))
+        self._preference_revision = self._preferences_store.value(
+            "preferences/revision", 0)
+
+    def _reload_notch_preferences(self):
+        self._preferences_store.sync()
+        revision = self._preferences_store.value("preferences/revision", 0)
+        if revision == self._preference_revision:
+            return
+        self._read_notch_preferences()
+        self._apply_notch_preferences()
+
+    def _apply_notch_preferences(self):
+        if not hasattr(self, "container"):
+            return
+        self.setWindowOpacity(max(0.7, min(1.0,
+            self._pref("appearance/opacity", 100) / 100.0)))
+        self.default_clock_label.setVisible(
+            self._pref("layout/show_clock", True))
+        self.default_battery_indicator.setVisible(
+            self._pref("layout/show_battery", True))
+        self.status_dot.setVisible(
+            self.status_dot.isVisible() and self._pref("layout/show_status_dot", True))
+        if not self._pref("layout/show_album_art", True):
+            self.album_art.hide()
+            self.media_feature_art.hide()
+        else:
+            self.media_feature_art.show()
+        for page, feature in {
+                "clipboard": "clipboard", "calendar": "calendar",
+                "focus": "timer", "transfer": "phone_transfer"}.items():
+            if page in self.dashboard_nav_buttons:
+                self.dashboard_nav_buttons[page].setVisible(
+                    self._feature_enabled(feature))
+        order = self._pref(
+            "layout/media_controls",
+            "Previous · Play/Pause · Next").split(" · ")
+        controls = {
+            "Previous": self.media_feature_previous_btn,
+            "Play/Pause": self.media_feature_play_btn,
+            "Next": self.media_feature_next_btn,
+        }
+        for name in order:
+            button = controls.get(name)
+            if button is not None:
+                self.media_feature_controls_layout.removeWidget(button)
+                self.media_feature_controls_layout.insertWidget(
+                    max(1, self.media_feature_controls_layout.count() - 1), button)
+        scale = max(80, min(140, self._pref("appearance/font_scale", 100)))
+        font = QApplication.font()
+        font.setPointSizeF(9.0 * scale / 100.0)
+        QApplication.setFont(font)
+        always_on_top = self._pref("behavior/always_on_top", True)
+        currently_on_top = bool(
+            self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+        if always_on_top != currently_on_top:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, always_on_top)
+            self.show()
+        self._apply_container_style_for_size(self._compact_size())
+        if not self.is_expanded:
+            self._present_compact(self._compact_size())
+
+    def _feature_enabled(self, name):
+        return bool(self._pref(f"features/{name}", True))
+
+    def _schedule_collapse(self, fallback_ms=1800, feature=False):
+        if not self._pref("behavior/auto_collapse", True):
+            return
+        delay = self._pref("behavior/auto_collapse_ms", fallback_ms)
+        (self._feature_collapse_timer if feature else self._collapse_timer).start(
+            max(250, int(delay)))
 
     def initUI(self):
         # Frameless window and Tool flag so it doesn't show in the taskbar
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool |
-                            Qt.WindowType.WindowStaysOnTopHint)
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+        if self._pref("behavior/always_on_top", True):
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAcceptDrops(True)
         self.resize(self.EXPANDED_SIZE)
@@ -1777,6 +1887,7 @@ class JarvisWidget(QWidget):
         media_controls.addWidget(self.media_feature_play_btn)
         media_controls.addWidget(self.media_feature_next_btn)
         media_controls.addStretch()
+        self.media_feature_controls_layout = media_controls
         media_player_layout.addLayout(media_controls)
         self.media_feature_widget.hide()
 
@@ -2233,13 +2344,17 @@ class JarvisWidget(QWidget):
         settings_actions = (
             ("Battery settings", "ms-settings:batterysaver"),
             ("Notifications", "ms-settings:notifications"),
-            ("Dynamic Island preferences", "ms-settings:appsfeatures"),
+            ("Dynamic Island preferences", "dexget-settings"),
         )
         for index, (text_value, uri) in enumerate(settings_actions):
             button = QPushButton(text_value)
             button.setFixedHeight(48)
             button.setStyleSheet("background:#18181b; text-align:left; padding-left:16px;")
-            button.clicked.connect(lambda checked=False, target=uri: self._launch_uri(target))
+            if uri == "dexget-settings":
+                button.clicked.connect(self._launch_notch_settings)
+            else:
+                button.clicked.connect(
+                    lambda checked=False, target=uri: self._launch_uri(target))
             settings_layout.addWidget(button, index // 2, index % 2)
 
         self.dashboard_settings = settings
@@ -2484,12 +2599,21 @@ class JarvisWidget(QWidget):
         return QRect(round(center_x - width / 2.0), y, width, height)
 
     def _apply_default_container_style(self):
-        self.container.setStyleSheet("""
-            #Container {
-                background-color: rgba(12, 14, 18, 244);
-                border-radius: 28px;
+        theme = self._pref("appearance/theme", "Midnight")
+        backgrounds = {
+            "Black": "rgba(0, 0, 0, 252)",
+            "Graphite": "rgba(24, 26, 31, 248)",
+            "Glass": "rgba(18, 22, 29, 224)",
+            "Midnight": "rgba(12, 14, 18, 244)",
+        }
+        background = backgrounds.get(theme, backgrounds["Midnight"])
+        radius = self._pref("appearance/corner_radius", 24)
+        self.container.setStyleSheet(f"""
+            #Container {{
+                background-color: {background};
+                border-radius: {radius}px;
                 border: 1px solid rgba(255, 255, 255, 48);
-            }
+            }}
         """)
 
     def _apply_container_style_for_size(self, size):
@@ -2509,13 +2633,7 @@ class JarvisWidget(QWidget):
             self._apply_default_container_style()
 
     def _apply_notification_container_style(self):
-        self.container.setStyleSheet("""
-            #Container {
-                background-color: rgba(12, 14, 18, 244);
-                border-radius: 28px;
-                border: 1px solid rgba(255, 255, 255, 48);
-            }
-        """)
+        self._apply_default_container_style()
 
     def _media_button(self, text, primary=False):
         button = QPushButton(text)
@@ -2631,6 +2749,8 @@ class JarvisWidget(QWidget):
                 else f"{minutes}:{seconds:02d}")
 
     def prompt_timer(self):
+        if not self._feature_enabled("timer"):
+            return
         minutes, accepted = QInputDialog.getInt(
             self, "Start timer", "Timer length in minutes:", 5, 1, 1440, 1)
         if accepted:
@@ -2724,7 +2844,7 @@ class JarvisWidget(QWidget):
             self.activate_media_island()
         else:
             self._present_compact(self._compact_size())
-            self._collapse_timer.start(1800)
+            self._schedule_collapse(1800)
 
     @staticmethod
     def _launch_uri(uri):
@@ -2740,6 +2860,22 @@ class JarvisWidget(QWidget):
             subprocess.Popen([program])
         except Exception:
             pass
+
+    def _launch_notch_settings(self):
+        try:
+            if getattr(sys, "frozen", False):
+                command = [sys.executable, "--settings"]
+            else:
+                command = [sys.executable,
+                           os.path.join(os.path.dirname(__file__), "start_app.py"),
+                           "--settings"]
+            subprocess.Popen(command, creationflags=getattr(
+                subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception as exc:
+            if hasattr(self, "tray_icon"):
+                self.tray_icon.showMessage(
+                    "Dexget", f"Could not open settings: {exc}",
+                    QSystemTrayIcon.MessageIcon.Warning, 3000)
 
     def _toggle_dashboard_settings(self):
         self._show_dashboard_page("settings")
@@ -4232,6 +4368,9 @@ class JarvisWidget(QWidget):
             self._call_hide_timer.start(4500)
 
     def _check_hot_zone(self):
+        if not self._pref("behavior/hover_reveal", True):
+            self._hover_leave_at = None
+            return
         if (self._is_hiding or self.is_expanded or self.worker.busy.is_set()
                 or self._timer_active
                 or (self._media and self._media.get("playing")
@@ -4384,7 +4523,7 @@ class JarvisWidget(QWidget):
             if self._pointer_inside_island():
                 self._feature_collapse_timer.stop()
             else:
-                self._feature_collapse_timer.start(1200)
+                self._schedule_collapse(1200, feature=True)
 
     def _control_expanded_media(self, action):
         if action == "play_pause" and self._media:
@@ -4468,7 +4607,7 @@ class JarvisWidget(QWidget):
         if (self._pointer_inside_island() or self._input_interaction_active()
                 or self.worker.busy.is_set()
                 or not self.confirmation_panel.isHidden()):
-            self._feature_collapse_timer.start(900)
+            self._schedule_collapse(900, feature=True)
             return
         if self._expanded_view == "feature":
             self._auto_collapse_feature()
@@ -4489,7 +4628,7 @@ class JarvisWidget(QWidget):
         if self._call_context and not self._media:
             self._call_hide_timer.start(4500)
         elif not self._media and self._assistant_state == "Idle":
-            self._collapse_timer.start(1400)
+            self._schedule_collapse(1400)
 
     def open_ai_panel(self):
         """Switch from a feature surface to the automation conversation."""
@@ -4760,7 +4899,7 @@ class JarvisWidget(QWidget):
             self.status_dot.setStyleSheet("color: #39e58c; font-size: 15px;")
             if not self.is_expanded:
                 self._animate_to(self.COLLAPSED_SIZE)
-                self._collapse_timer.start(1400)
+                self._schedule_collapse(1400)
 
     def hide_call_island(self):
         """Minimize a call activity while continuing to track the call."""
@@ -4879,6 +5018,8 @@ class JarvisWidget(QWidget):
         self.expand_island()
 
     def _start_notification_listener(self):
+        if not self._feature_enabled("notifications"):
+            return
         try:
             asyncio.run(self._initialize_notification_listener())
         except Exception:
@@ -4950,6 +5091,8 @@ class JarvisWidget(QWidget):
         self.battery_indicator.set_percent(value)
 
     def show_charging_activity(self, percent):
+        if not self._feature_enabled("charging"):
+            return
         if self._notification_active:
             self.finish_notification_activity(restore=False)
         if self._low_power_active:
@@ -5000,6 +5143,8 @@ class JarvisWidget(QWidget):
             self.hide_media_island()
 
     def show_headset_activity(self, name):
+        if not self._feature_enabled("headset"):
+            return
         if self._notification_active:
             self.finish_notification_activity(restore=False)
         if self._low_power_active:
@@ -5061,6 +5206,8 @@ class JarvisWidget(QWidget):
         self.low_power_battery.set_percent(value)
 
     def show_low_power_activity(self, percent):
+        if not self._feature_enabled("low_battery"):
+            return
         if self._notification_active:
             self.finish_notification_activity(restore=False)
         if self._charging_active:
@@ -5112,6 +5259,8 @@ class JarvisWidget(QWidget):
             self.hide_media_island()
 
     def show_notification_activity(self, app_name, title, body):
+        if not self._feature_enabled("notifications"):
+            return
         if self._charging_active:
             self._charging_hide_timer.stop()
             self.finish_charging_activity(restore=False)
@@ -5160,17 +5309,18 @@ class JarvisWidget(QWidget):
         self.notification_time.show()
         self._present_compact(self.NOTIFICATION_SIZE)
         self._play_notification_sound()
-        self._notification_hide_timer.start(5200)
+        self._notification_hide_timer.start(
+            self._pref("behavior/notification_ms", 5200))
 
-    @staticmethod
-    def _play_notification_sound():
+    def _play_notification_sound(self):
         """Play the configured Windows notification cue without blocking UI."""
-        if sys.platform != "win32":
+        if (sys.platform != "win32" or
+                not self._pref("sound/enabled", True)):
             return
         try:
             import winsound
             winsound.PlaySound(
-                "SystemNotification",
+                self._pref("sound/notification", "SystemNotification"),
                 winsound.SND_ALIAS | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
         except Exception:
             try:
@@ -5211,7 +5361,7 @@ class JarvisWidget(QWidget):
 
     def leaveEvent(self, event):
         if self.is_expanded:
-            self._feature_collapse_timer.start(1100)
+            self._schedule_collapse(1100, feature=True)
         elif not self._media and not self._call_context:
             self._hover_leave_at = time.monotonic()
         super().leaveEvent(event)
@@ -5559,6 +5709,9 @@ class JarvisWidget(QWidget):
                 if url.isLocalFile() and url.toLocalFile()]
 
     def dragEnterEvent(self, event):
+        if not self._feature_enabled("file_shelf"):
+            event.ignore()
+            return
         if self._local_drop_paths(event.mimeData()):
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
@@ -5566,6 +5719,9 @@ class JarvisWidget(QWidget):
         event.ignore()
 
     def dragMoveEvent(self, event):
+        if not self._feature_enabled("file_shelf"):
+            event.ignore()
+            return
         if self._local_drop_paths(event.mimeData()):
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
@@ -5573,6 +5729,9 @@ class JarvisWidget(QWidget):
         event.ignore()
 
     def dropEvent(self, event):
+        if not self._feature_enabled("file_shelf"):
+            event.ignore()
+            return
         if self._store_file_shelf(self._local_drop_paths(event.mimeData())):
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
@@ -5648,9 +5807,11 @@ class JarvisWidget(QWidget):
         if state in ("Idle", "Stopping"):
             self.confirmation_panel.hide()
         if state == "Idle":
-            self._collapse_timer.start(4500)
+            self._schedule_collapse(4500)
 
     def update_media(self, media):
+        if not self._feature_enabled("media"):
+            media = {}
         previous_key = self._last_media_key
         was_playing = bool(self._media.get("playing"))
         previous_display = (
@@ -5714,7 +5875,7 @@ class JarvisWidget(QWidget):
                 self.status_label.setText(self._assistant_subtitle[:70])
                 self.status_label.setToolTip(self._assistant_subtitle)
             if self._assistant_state == "Idle" and not self._call_context:
-                self._collapse_timer.start(1800)
+                self._schedule_collapse(1800)
         if self._default_page_override:
             if self._is_default_activity():
                 self._default_page_override = False
@@ -5809,6 +5970,10 @@ class JarvisWidget(QWidget):
         self.tray_macro_stop_action.triggered.connect(self._stop_macro_activity)
         self.tray_macro_stop_action.setVisible(False)
         self.tray_menu.addAction(self.tray_macro_stop_action)
+        self.tray_menu.addSeparator()
+        self.tray_settings_action = QAction("Notch settings", self)
+        self.tray_settings_action.triggered.connect(self._launch_notch_settings)
+        self.tray_menu.addAction(self.tray_settings_action)
         self.tray_menu.addSeparator()
         self.tray_force_close_action = QAction("Force close Dexget", self)
         self.tray_force_close_action.triggered.connect(self.force_close)
@@ -5917,8 +6082,9 @@ class JarvisWidget(QWidget):
         if self.height() <= 6:
             return 2.0
         elif self.is_expanded:
-            return 24.0
-        return min(self.height() / 2.0, 26.0)
+            return float(self._pref("appearance/corner_radius", 24))
+        return min(self.height() / 2.0,
+                   float(self._pref("appearance/corner_radius", 24)))
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

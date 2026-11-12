@@ -12,6 +12,7 @@ def build():
         '--hidden-import=jarvis_integration',
         '--hidden-import=jarvis.model_runtime',
         '--hidden-import=main',
+        '--hidden-import=notch_settings',
         '--exclude-module=PySide6',
         '--windowed',              # Copilot key launch must not open a console
         '--clean'                 # Clean PyInstaller cache

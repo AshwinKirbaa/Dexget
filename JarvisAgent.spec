@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = ['jarvis', 'jarvis_integration', 'jarvis.model_runtime', 'main']
+hiddenimports = ['jarvis', 'jarvis_integration', 'jarvis.model_runtime', 'main', 'notch_settings']
 tmp_ret = collect_all('winrt')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
