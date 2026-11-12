@@ -2736,6 +2736,7 @@ class JarvisWidget(QWidget):
         # centres this row in its normal 48 px bar and the 34 px notch clips
         # the top, leaving the clock and battery visibly too low.
         self.title_bar.setFixedHeight(
+            self.NOTIFICATION_SIZE.height() if self._notification_active else
             self.FILE_SHELF_SIZE.height() if shelf_visible else
             self.COLLAPSED_SIZE.height() if default else 48)
         self.default_status_widget.setVisible(default or shelf_visible)
