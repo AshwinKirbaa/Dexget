@@ -980,6 +980,9 @@ class MediaSessionWorker(QThread):
         next_metadata_poll = 0.0
         cached_artwork_key = None
         cached_artwork = b""
+        artwork_candidate = b""
+        artwork_candidate_hits = 0
+        artwork_refresh_remaining = 0
         missing_since = None
         while not self.shutdown_event.is_set():
             session = self._select_session(manager, PlaybackStatus)
@@ -1020,8 +1023,29 @@ class MediaSessionWorker(QThread):
                             session.source_app_user_model_id,
                         )
                         if artwork_key != cached_artwork_key:
-                            cached_artwork = await self._read_thumbnail(props.thumbnail)
                             cached_artwork_key = artwork_key
+                            # GSMTC commonly publishes the new title one or
+                            # two polls before replacing the old thumbnail.
+                            # Do not permanently cache that stale cover under
+                            # the new track key.  Clear it and sample several
+                            # times until the new image stabilises.
+                            cached_artwork = b""
+                            artwork_candidate = b""
+                            artwork_candidate_hits = 0
+                            artwork_refresh_remaining = 8
+                        if artwork_refresh_remaining > 0:
+                            sample = await self._read_thumbnail(props.thumbnail)
+                            artwork_refresh_remaining -= 1
+                            if sample:
+                                if sample == artwork_candidate:
+                                    artwork_candidate_hits += 1
+                                else:
+                                    artwork_candidate = sample
+                                    artwork_candidate_hits = 1
+                                # Two matching polls avoid accepting the old
+                                # cover during the title/thumbnail hand-off.
+                                if artwork_candidate_hits >= 2:
+                                    cached_artwork = artwork_candidate
                         current = {
                             "title": (props.title or "Now playing").strip(),
                             "artist": (props.artist or props.album_artist or "").strip(),
