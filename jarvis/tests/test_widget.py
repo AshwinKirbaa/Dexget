@@ -279,6 +279,10 @@ def test_dynamic_island_reacts_to_media_metadata():
         widget = JarvisWidget()
     try:
         widget.collapse_island()
+        # Simulate returning from a default/transient surface where the media
+        # identity column was hidden before playback became active.
+        widget._activity_page = "default"
+        widget.identity_widget.hide()
         widget.update_media({
             "title": "One Sun One Moon",
             "artist": "Anirudh Ravichander",
@@ -299,6 +303,9 @@ def test_dynamic_island_reacts_to_media_metadata():
             time.sleep(0.01)
         app.processEvents()
         assert widget.name_label.text() == "One Sun One Moon"
+        assert widget._activity_page == "media"
+        assert not widget.identity_widget.isHidden()
+        assert widget.identity_widget.width() >= 120
         assert widget.name_label.maximumWidth() == 200
         assert widget.status_label.text() == "Anirudh Ravichander"
         assert widget.play_pause_btn.text() == "❚❚"

@@ -1801,6 +1801,10 @@ class JarvisWidget(QWidget):
         self.album_art.hide()
 
         self.identity_widget = QWidget()
+        # Keep enough room for compact media metadata.  With an Ignored label
+        # policy Qt can otherwise give this whole column zero pixels and hand
+        # the space to the flexible separator before the media controls.
+        self.identity_widget.setMinimumWidth(0)
         identity_layout = QVBoxLayout(self.identity_widget)
         identity_layout.setContentsMargins(0, 7, 0, 7)
         identity_layout.setSpacing(0)
@@ -5045,6 +5049,14 @@ class JarvisWidget(QWidget):
         self._auto_hidden = False
         self._media_manually_hidden = False
         self.is_expanded = False
+        # A newly active session owns the compact surface unless the user has
+        # explicitly switched to the default page or a timer owns its page.
+        # Merely resizing the old/default surface leaves identity_widget
+        # hidden, producing artwork and controls with a blank centre.
+        if not self._default_page_override and not self._timer_active:
+            self._activity_page = "media"
+            self.identity_widget.setMinimumWidth(120)
+            self._sync_compact_surface()
         self._present_compact(self._compact_size())
 
     def _pulse_media_indicator(self):
