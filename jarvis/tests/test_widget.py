@@ -305,10 +305,12 @@ def test_dynamic_island_reacts_to_media_metadata():
         assert widget.name_label.text() == "One Sun One Moon"
         assert widget._activity_page == "media"
         assert not widget.identity_widget.isHidden()
-        assert widget.identity_widget.width() >= 120
-        assert widget.name_label.maximumWidth() == 200
+        assert widget.identity_widget.width() >= 150
+        assert widget.name_label.maximumWidth() == 220
         assert widget.status_label.text() == "Anirudh Ravichander"
         assert widget.play_pause_btn.text() == "❚❚"
+        assert widget.album_art.width() == 44
+        assert widget.play_pause_btn.width() == 36
         assert not widget.album_art.isHidden()
         assert not widget.previous_btn.isHidden()
         assert widget.MEDIA_MIN_WIDTH <= widget._compact_size().width() < widget.MEDIA_SIZE.width()

@@ -1487,7 +1487,7 @@ class JarvisWidget(QWidget):
     # time on the left, file icon in the optical centre, battery on the right.
     FILE_SHELF_SIZE = QSize(220, 34)
     FILE_SHELF_EXPANDED_SIZE = QSize(440, 210)
-    MEDIA_SIZE = QSize(520, 60)
+    MEDIA_SIZE = QSize(560, 64)
     CHARGING_SIZE = QSize(360, 56)
     LOW_POWER_SIZE = QSize(350, 56)
     HEADSET_SIZE = QSize(350, 56)
@@ -1496,8 +1496,8 @@ class JarvisWidget(QWidget):
     NOTIFICATION_SIZE = QSize(520, 108)
     CALL_SIZE = QSize(360, 52)
     TIMER_SIZE = QSize(270, 58)
-    MEDIA_MIN_WIDTH = 400
-    MEDIA_BASE_WIDTH = 300
+    MEDIA_MIN_WIDTH = 440
+    MEDIA_BASE_WIDTH = 320
     EXPANDED_SIZE = QSize(440, 430)
     FEATURE_EXPANDED_SIZE = QSize(440, 230)
     DASHBOARD_EXPANDED_SIZE = QSize(520, 260)
@@ -1812,16 +1812,20 @@ class JarvisWidget(QWidget):
         self.title_bar_opacity.setOpacity(1.0)
         self.title_bar.setGraphicsEffect(self.title_bar_opacity)
         title_layout = QHBoxLayout(self.title_bar)
-        title_layout.setContentsMargins(14, 0, 12, 0)
+        title_layout.setContentsMargins(12, 0, 12, 0)
+        title_layout.setSpacing(8)
 
         self.status_dot = QLabel("●")
-        self.status_dot.setFixedWidth(18)
-        self.status_dot.setStyleSheet("color: #39e58c; font-size: 15px;")
+        self.status_dot.setFixedWidth(10)
+        self.status_dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_dot.setStyleSheet("color: #39e58c; font-size: 10px;")
 
         self.album_art = QLabel()
-        self.album_art.setFixedSize(40, 40)
+        self.album_art.setFixedSize(44, 44)
         self.album_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.album_art.setStyleSheet("background: #202329; border-radius: 5px;")
+        self.album_art.setStyleSheet(
+            "background: #202329; border-radius: 8px; "
+            "border: 1px solid rgba(255, 255, 255, 20);")
         self.album_art.hide()
 
         self.identity_widget = QWidget()
@@ -1830,13 +1834,13 @@ class JarvisWidget(QWidget):
         # the space to the flexible separator before the media controls.
         self.identity_widget.setMinimumWidth(0)
         identity_layout = QVBoxLayout(self.identity_widget)
-        identity_layout.setContentsMargins(0, 7, 0, 7)
-        identity_layout.setSpacing(0)
+        identity_layout.setContentsMargins(0, 6, 0, 6)
+        identity_layout.setSpacing(1)
         self.name_label = QLabel("DEXGET")
-        self.name_label.setMaximumWidth(200)
+        self.name_label.setMaximumWidth(220)
         self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self.name_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        self.name_label.setStyleSheet("color: white; letter-spacing: 1px;")
+        self.name_label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self.name_label.setStyleSheet("color: #f8f9fb;")
         
         self.status_label = QLabel("Ready")
         self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
@@ -2976,13 +2980,14 @@ class JarvisWidget(QWidget):
 
     def _media_button(self, text, primary=False):
         button = QPushButton(text)
-        button.setFixedSize(32 if primary else 28, 32)
-        button.setFont(QFont("Segoe UI Symbol", 15 if primary else 12,
+        button.setFixedSize(36 if primary else 32, 36)
+        button.setFont(QFont("Segoe UI Symbol", 16 if primary else 13,
                              QFont.Weight.DemiBold))
         button.setStyleSheet("""
-            QPushButton { background: transparent; border: none; color: white; }
-            QPushButton:hover { color: #70cfff; }
-            QPushButton:pressed { color: #2d9cff; }
+            QPushButton { background: transparent; border: none; color: #f7f8fa;
+                          border-radius: 18px; padding: 0px; }
+            QPushButton:hover { color: white; background: rgba(255, 255, 255, 18); }
+            QPushButton:pressed { color: #70cfff; background: rgba(98, 216, 255, 28); }
         """)
         return button
 
@@ -5079,7 +5084,7 @@ class JarvisWidget(QWidget):
         # hidden, producing artwork and controls with a blank centre.
         if not self._default_page_override and not self._timer_active:
             self._activity_page = "media"
-            self.identity_widget.setMinimumWidth(120)
+            self.identity_widget.setMinimumWidth(150)
             self._sync_compact_surface()
         self._present_compact(self._compact_size())
 
@@ -5088,7 +5093,7 @@ class JarvisWidget(QWidget):
             return
         self._pulse_phase = not self._pulse_phase
         color = "#a9ecff" if self._pulse_phase else "#55d6ff"
-        size = 14 if self._pulse_phase else 12
+        size = 11 if self._pulse_phase else 9
         self.status_dot.setStyleSheet(f"color: {color}; font-size: {size}px;")
 
     def _check_battery_state(self):
